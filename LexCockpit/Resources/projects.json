@@ -1,0 +1,9 @@
+{
+  "projects": [
+    { "id": "2026-06-17-the-brexit-fail", "title": "The Brexit Fail", "type": "deep-dive", "status": "published", "date": "2026-06-17", "topic": "Geopolitics", "url": "https://lexdigestglobal.com/articles/2026-06-17-the-brexit-fail.html" },
+    { "id": "2026-06-18-armenia-path-to-eu", "title": "Armenia on the Path to EU Membership?", "type": "briefing", "status": "published", "date": "2026-06-18", "topic": "Geopolitics", "url": "https://lexdigestglobal.com/articles/2026-06-18-armenia-path-to-eu.html" },
+    { "id": "2026-06-18-the-german-autumn", "title": "The German Autumn", "type": "deep-dive", "status": "published", "date": "2026-06-18", "topic": "Domestic Policy", "url": "https://lexdigestglobal.com/articles/2026-06-18-the-german-autumn.html" },
+    { "id": "2026-06-18-vienna-rent-secret", "title": "Vienna's Rent Secret", "type": "briefing", "status": "published", "date": "2026-06-18", "topic": "Economy & Trade", "url": "https://lexdigestglobal.com/articles/2026-06-18-vienna-rent-secret.html" },
+    { "id": "example-draft", "title": "Example: a draft you're working on", "type": "weekly-brief", "status": "draft", "date": "2026-07-20", "scheduledPublishAt": "2026-07-27", "topic": "EU Law & Regulation" }
+  ]
+}
