@@ -110,6 +110,20 @@ struct EnforcementCase: Decodable, Identifiable {
 
 struct ProjectsFile: Decodable {
     let projects: [Project]
+    let sites: [SiteProject]?      // site workspaces (CMS / deploys / repo / content)
+}
+
+/// One website project = one workspace (Overview · Content · CMS · Deploys · Repo).
+/// Secrets never live here — tokens are in the macOS Keychain.
+struct SiteProject: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let url: String?               // https://lexdigestglobal.com
+    let cms_url: String?           // https://lexdigestglobal.com/admin/
+    let repo: String?              // "owner/name" on GitHub
+    let default_branch: String?    // defaults to main
+    let netlify_site_id: String?   // Netlify API site id
+    let content_paths: [String]?   // ["content/articles/", …]
 }
 
 struct Project: Decodable, Identifiable {

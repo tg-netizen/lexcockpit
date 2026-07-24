@@ -11,6 +11,7 @@ final class CockpitStore: ObservableObject {
     @Published var negotiations: [Negotiation] = []
     @Published var cases: [EnforcementCase] = []
     @Published var projects: [Project] = []
+    @Published var sites: [SiteProject] = []
 
     @Published var lastFetched: String = ""
     @Published var isLoading = false
@@ -49,13 +50,23 @@ final class CockpitStore: ObservableObject {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    /// Resource bundle: Bundle.module under `swift run`, Bundle.main in Xcode.
+    private var resourceBundle: Bundle {
+        #if SWIFT_PACKAGE
+        return Bundle.module
+        #else
+        return Bundle.main
+        #endif
+    }
+
     /// Loads the bundled sample projects.json on first launch (if none loaded yet).
     func loadProjectsFromBundle() {
         guard projects.isEmpty,
-              let url = Bundle.main.url(forResource: "projects", withExtension: "json"),
+              let url = resourceBundle.url(forResource: "projects", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let pf = try? JSONDecoder().decode(ProjectsFile.self, from: data) else { return }
         projects = pf.projects
+        if sites.isEmpty { sites = pf.sites ?? [] }
     }
 
     /// Load your real projects.json (generate it with scripts/build-projects.js).
@@ -66,6 +77,7 @@ final class CockpitStore: ObservableObject {
             return
         }
         projects = pf.projects
+        if let s = pf.sites, !s.isEmpty { sites = s }
     }
 
     // Convenience counts for the dashboard

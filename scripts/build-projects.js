@@ -17,6 +17,22 @@ const ROOT = process.cwd();
 const DIR = path.join(ROOT, 'content', 'articles');
 const BASE = 'https://lexdigestglobal.com/articles/';
 
+// Site workspace config for the LexCockpit tabs (Overview · Content · CMS ·
+// Deploys · Repo). NO SECRETS here — tokens live in the macOS Keychain.
+// netlify_site_id: Netlify → Site configuration → General → Site ID.
+const SITES = [
+  {
+    id: 'lexdigestglobal',
+    name: 'LexDigestGlobal',
+    url: 'https://lexdigestglobal.com',
+    cms_url: 'https://lexdigestglobal.com/admin/',
+    repo: 'tg-netizen/lexdigestglobal-real-version',
+    default_branch: 'main',
+    netlify_site_id: '',
+    content_paths: ['content/articles/'],
+  },
+];
+
 // Minimal front-matter reader: top-level `key: value` lines + simple `- item` lists.
 function frontmatter(raw) {
   if (!raw.startsWith('---')) return {};
@@ -60,5 +76,5 @@ const projects = fs.readdirSync(DIR)
   })
   .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
-process.stdout.write(JSON.stringify({ projects }, null, 2) + '\n');
-console.error(`Wrote ${projects.length} projects.`);
+process.stdout.write(JSON.stringify({ sites: SITES, projects }, null, 2) + '\n');
+console.error(`Wrote ${projects.length} projects + ${SITES.length} site workspace(s).`);

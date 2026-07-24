@@ -1,4 +1,16 @@
 {
+  "sites": [
+    {
+      "id": "lexdigestglobal",
+      "name": "LexDigestGlobal",
+      "url": "https://lexdigestglobal.com",
+      "cms_url": "https://lexdigestglobal.com/admin/",
+      "repo": "tg-netizen/lexdigestglobal-real-version",
+      "default_branch": "main",
+      "netlify_site_id": "",
+      "content_paths": ["content/articles/"]
+    }
+  ],
   "projects": [
     { "id": "2026-06-17-the-brexit-fail", "title": "The Brexit Fail", "type": "deep-dive", "status": "published", "date": "2026-06-17", "topic": "Geopolitics", "url": "https://lexdigestglobal.com/articles/2026-06-17-the-brexit-fail.html" },
     { "id": "2026-06-18-armenia-path-to-eu", "title": "Armenia on the Path to EU Membership?", "type": "briefing", "status": "published", "date": "2026-06-18", "topic": "Geopolitics", "url": "https://lexdigestglobal.com/articles/2026-06-18-armenia-path-to-eu.html" },
