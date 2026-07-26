@@ -12,6 +12,12 @@ struct LexCockpitApp: App {
             let ok = runFrontmatterSelfTests()
             exit(ok ? 0 : 1)
         }
+        // `--roundtrip <dir>` → run the WYSIWYG round-trip data-safety test
+        // against real article files (offscreen Toast UI editor) and exit.
+        if let i = CommandLine.arguments.firstIndex(of: "--roundtrip"),
+           CommandLine.arguments.indices.contains(i + 1) {
+            RoundtripTest.start(dir: CommandLine.arguments[i + 1])
+        }
         // Under `swift run` there is no app bundle — promote to a regular
         // foreground app so the window appears and takes focus.
         DispatchQueue.main.async {
@@ -67,8 +73,10 @@ enum SidebarSelection: Hashable {
 struct ContentView: View {
     @EnvironmentObject var store: CockpitStore
     @StateObject private var updates = UpdateChecker()
+    @StateObject private var chrome = ChromeModel()
     @State private var selection: SidebarSelection? = .section(.dashboard)
     @State private var showSettings = false
+    @State private var columns = NavigationSplitViewVisibility.automatic
 
     /// Flat ⌘1…⌘9 order: Dashboard, then projects, then topics.
     private var shortcutOrder: [SidebarSelection] {
@@ -78,7 +86,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
             VStack(spacing: 0) {
@@ -127,6 +135,12 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) { SettingsSheet() }
         .background(Color.bgPage)
         .background(sectionShortcuts)
+        .environmentObject(chrome)
+        .onChange(of: chrome.focus) { focused in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                columns = focused ? .detailOnly : .automatic
+            }
+        }
     }
 
     /// Hidden buttons carrying ⌘1…⌘9 for fast section switching.

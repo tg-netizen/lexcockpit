@@ -123,7 +123,7 @@ struct GHPutResponse: Decodable {
 }
 
 enum GitHubAPI {
-    private static func request(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+    static func request(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         guard let token = Keychain.get(Keychain.githubPAT) else { throw APIError.noToken("GitHub") }
         guard let url = URL(string: "https://api.github.com\(path)") else { throw APIError.badURL }
         var req = URLRequest(url: url)
@@ -150,7 +150,7 @@ enum GitHubAPI {
         return data
     }
 
-    private static func escape(_ p: String) -> String {
+    static func escape(_ p: String) -> String {
         p.split(separator: "/")
             .map { String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
             .joined(separator: "/")

@@ -129,6 +129,67 @@ struct CMSTabView: View {
     }
 }
 
+// MARK: - Design tab (Canva)
+
+/// Canva in a persistent webview — same data-store + OAuth-popup pattern as
+/// the Sveltia tab. The integration IS the workflow: design → download →
+/// drag the export into the article editor (Change-2 pipeline picks it up).
+struct DesignTabView: View {
+    @StateObject private var controller = CMSController.shared(for: URL(string: "https://www.canva.com/")!)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button { controller.webView.goBack() } label: { Image(systemName: "chevron.left") }
+                    .disabled(!controller.webView.canGoBack).help("Back")
+                Button { controller.webView.goForward() } label: { Image(systemName: "chevron.right") }
+                    .disabled(!controller.webView.canGoForward).help("Forward")
+                Button { controller.reload() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Reload")
+                Button { NSWorkspace.shared.open(URL(string: "https://www.canva.com/")!) } label: {
+                    Image(systemName: "safari")
+                }
+                .help("Open in Browser")
+                Divider().frame(height: 14)
+                Link("New design (OG 1200×630)", destination: URL(string: "https://www.canva.com/create/")!)
+                    .font(.caption)
+                Spacer()
+                Text(controller.pageTitle).font(.caption).foregroundColor(.textSecondary).lineLimit(1)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            Divider()
+            WebViewRepresentable(webView: controller.webView)
+            Divider()
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.doc").font(.caption).foregroundColor(.textSecondary)
+                Text("Design covers and social cards here — download, then drag the file into your article (Content tab). It uploads and embeds automatically.")
+                    .font(.caption).foregroundColor(.textSecondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Color.bgCard)
+        }
+        .sheet(isPresented: Binding(
+            get: { controller.popup != nil },
+            set: { if !$0 { controller.popup = nil } }
+        )) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Sign in").font(.headline)
+                    Spacer()
+                    Button("Close") { controller.popup = nil }
+                }
+                .padding(10)
+                Divider()
+                if let popup = controller.popup {
+                    WebViewRepresentable(webView: popup)
+                }
+            }
+            .frame(width: 900, height: 680)
+        }
+    }
+}
+
 // MARK: - Markdown preview
 
 /// Renders markdown in a WKWebView using marked.js (CDN) inside a local HTML

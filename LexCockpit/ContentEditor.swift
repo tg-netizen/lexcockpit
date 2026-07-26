@@ -38,6 +38,10 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var tagsCSV: String
     @Published var isDraft: Bool
     @Published var bodyText: String
+    @Published var heroImagePath: String
+    @Published var uploadingImage = false
+    @Published var restoreOffer: String?     // autosaved draft found on open
+    private var autosaveTimer: Timer?
 
     // Which fields are locked because their YAML shape is too complex to bind
     let opaqueKeys: Set<String>
@@ -59,7 +63,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.fmDoc = doc
 
         var opaque = Set<String>()
-        for key in ["title", "date", "author", "description", "draft", "status"] where doc.isOpaque(key) {
+        for key in ["title", "date", "author", "description", "draft", "status", "hero_image"] where doc.isOpaque(key) {
             opaque.insert(key)
         }
         if doc.entries.first(where: { $0.key == "tags" }).map({ !$0.isBindableList }) == true {
@@ -76,6 +80,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         let statusField = doc.scalar("status")
         self.isDraft = draftField == "true" || statusField == "draft" || (isNew && draftField == nil && statusField == nil)
         self.bodyText = doc.body
+        self.heroImagePath = doc.scalar("hero_image") ?? ""
     }
 
     var slug: String {
@@ -104,6 +109,9 @@ final class EditorDocument: ObservableObject, Identifiable {
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
             if !(items.isEmpty && doc.list("tags") == nil) { doc.setList("tags", items) }
+        }
+        if !opaqueKeys.contains("hero_image"), !(heroImagePath.isEmpty && doc.scalar("hero_image") == nil) {
+            doc.setScalar("hero_image", heroImagePath)
         }
         // Draft toggle drives whichever fields the file (or template) uses.
         if !opaqueKeys.contains("draft"), doc.scalar("draft") != nil {
@@ -137,6 +145,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             lastCommitSHA = resp.commit.sha
             fmDoc = FrontmatterDoc.parse(text)      // new baseline
             dirty = false
+            clearDraft()                            // local autosave no longer needed
             statusLine = "Committed \(String(resp.commit.sha.prefix(7))) — Netlify build starts automatically"
         } catch APIError.conflict {
             conflict = true
@@ -160,11 +169,55 @@ final class EditorDocument: ObservableObject, Identifiable {
             tagsCSV = (doc.list("tags") ?? []).joined(separator: ", ")
             isDraft = doc.scalar("draft") == "true" || doc.scalar("status") == "draft"
             bodyText = doc.body
+            heroImagePath = doc.scalar("hero_image") ?? ""
             dirty = false
             statusLine = "Reloaded the remote version."
         } catch {
             statusLine = error.localizedDescription
         }
+    }
+
+    // MARK: Local autosave (crash safety — cleared after a successful commit)
+
+    static var draftsDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LexCockpit/drafts", isDirectory: true)
+    }
+    var draftURL: URL { Self.draftsDir.appendingPathComponent(slug + ".md") }
+
+    func startAutosave() {
+        autosaveTimer?.invalidate()
+        autosaveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.autosaveNow() }
+        }
+    }
+
+    func autosaveNow() {
+        guard dirty else { return }
+        try? FileManager.default.createDirectory(at: Self.draftsDir, withIntermediateDirectories: true)
+        try? serialized().write(to: draftURL, atomically: true, encoding: .utf8)
+    }
+
+    func clearDraft() {
+        try? FileManager.default.removeItem(at: draftURL)
+    }
+
+    /// Apply an autosaved draft's fields. The remote baseline stays untouched,
+    /// so the document is dirty and saves through the normal SHA-checked path.
+    func restoreDraft() {
+        guard let text = restoreOffer else { return }
+        let doc = FrontmatterDoc.parse(text)
+        title = doc.scalar("title") ?? title
+        dateStr = doc.scalar("date") ?? dateStr
+        author = doc.scalar("author") ?? author
+        descriptionText = doc.scalar("description") ?? descriptionText
+        tagsCSV = (doc.list("tags") ?? []).joined(separator: ", ")
+        isDraft = doc.scalar("draft") == "true" || doc.scalar("status") == "draft"
+        heroImagePath = doc.scalar("hero_image") ?? heroImagePath
+        bodyText = doc.body
+        restoreOffer = nil
+        recomputeDirty()
+        statusLine = "Unsaved draft restored — review and save."
     }
 }
 
@@ -227,7 +280,12 @@ extension WorkspaceModel {
                 contentError = "Could not decode \(entry.name)."
                 return
             }
-            attachEditor(EditorDocument(repoPath: entry.path, text: text, sha: f.sha, isNew: false))
+            let doc = EditorDocument(repoPath: entry.path, text: text, sha: f.sha, isNew: false)
+            // Crash-safety: offer an autosaved local draft if one differs.
+            if let draft = try? String(contentsOf: doc.draftURL, encoding: .utf8), draft != text {
+                doc.restoreOffer = draft
+            }
+            attachEditor(doc)
         } catch {
             contentError = error.localizedDescription
         }
@@ -244,6 +302,7 @@ extension WorkspaceModel {
 
     private func attachEditor(_ doc: EditorDocument) {
         doc.onDirtyChange = { [weak self] d in self?.editorDirty = d }
+        doc.startAutosave()
         editor = doc
         editorDirty = doc.dirty
         preview.renderNow(doc.bodyText)
@@ -264,6 +323,7 @@ struct ContentTabView: View {
     var body: some View {
         if let doc = model.editor {
             EditorView(model: model, doc: doc, openDeploys: openDeploys)
+                .id(doc.id)                      // fresh editor (and webview) per document
         } else {
             ContentBrowserView(model: model)
         }
@@ -393,22 +453,48 @@ struct EditorView: View {
     @ObservedObject var doc: EditorDocument
     var openDeploys: () -> Void
 
+    @EnvironmentObject var chrome: ChromeModel
+    @StateObject private var wysiwyg = WysiwygController()
     @State private var mode: EditorMode = .split
     @State private var confirmClose = false
+    @State private var showQuality = false
+    @State private var dropTargeted = false
+    @State private var coverImage: NSImage?
+    @State private var showRestore = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            frontmatterForm
-            Divider()
-            editorArea
-            Divider()
-            footer
+            if !chrome.focus {
+                frontmatterForm
+                Divider()
+            }
+            HStack(spacing: 0) {
+                editorArea
+                if showQuality && !chrome.focus {
+                    Divider()
+                    QualityPanel(doc: doc, coverImage: coverImage)
+                        .frame(width: 270)
+                        .transition(.move(edge: .trailing))
+                }
+            }
+            if !chrome.focus {
+                Divider()
+                footer
+            }
         }
+        .onAppear { wireBridge() }
+        .task(id: doc.heroImagePath) { await loadCoverThumbnail() }
+        .onAppear { if doc.restoreOffer != nil { showRestore = true } }
         .alert("File changed on GitHub since you opened it", isPresented: $doc.conflict) {
             Button("Reload remote version") {
-                Task { if let repo = model.site.repo { await doc.reloadRemote(repo: repo) } }
+                Task {
+                    if let repo = model.site.repo {
+                        await doc.reloadRemote(repo: repo)
+                        wysiwyg.load(markdown: doc.bodyText)
+                    }
+                }
             }
             Button("Overwrite anyway", role: .destructive) {
                 Task { if let repo = model.site.repo { await doc.save(repo: repo, force: true) } }
@@ -417,11 +503,121 @@ struct EditorView: View {
         } message: {
             Text("Someone (or Sveltia) committed a newer version of this file. Reload to take the remote version, or overwrite it with your copy.")
         }
+        .alert("Restore unsaved draft?", isPresented: $showRestore) {
+            Button("Restore draft") {
+                doc.restoreDraft()
+                wysiwyg.load(markdown: doc.bodyText)
+            }
+            Button("Discard draft", role: .destructive) {
+                doc.restoreOffer = nil
+                doc.clearDraft()
+            }
+        } message: {
+            Text("A locally autosaved version of this article exists (e.g. after a crash). Restore it, or discard and keep the version from GitHub?")
+        }
         .confirmationDialog("Discard unsaved changes?", isPresented: $confirmClose) {
             Button("Discard changes", role: .destructive) { model.closeEditor() }
             Button("Keep editing", role: .cancel) {}
         }
     }
+
+    // MARK: Bridge wiring (bodyText stays the single source the save path uses)
+
+    private func wireBridge() {
+        // Preserve the body's blank-line envelope so an unedited document
+        // stays byte-identical through the WYSIWYG surface.
+        let envelope = MarkdownEnvelope.split(doc.bodyText)
+        wysiwyg.onChange = { md in
+            let wrapped = MarkdownEnvelope.rewrap(md, prefix: envelope.prefix, suffix: envelope.suffix)
+            doc.bodyText = wrapped
+            doc.recomputeDirty()
+            model.preview.update(markdown: wrapped)
+        }
+        wysiwyg.onImage = { id, name, data in
+            Task { await handleBridgeImage(id: id, name: name, data: data) }
+        }
+        wysiwyg.load(markdown: doc.bodyText)
+        model.preview.renderNow(doc.bodyText)
+    }
+
+    // MARK: Image pipeline
+
+    private func handleBridgeImage(id: String, name: String, data: Data) async {
+        guard let repo = model.site.repo else { return }
+        doc.uploadingImage = true
+        defer { doc.uploadingImage = false }
+        guard let prepared = ImagePipeline.prepare(data: data, suggestedName: name) else {
+            doc.statusLine = "Could not read that image."
+            return
+        }
+        do {
+            let path = try await ImagePipeline.upload(repo: repo, slug: doc.slug, prepared: prepared)
+            wysiwyg.imageUploaded(id: id, path: path)
+        } catch {
+            doc.statusLine = "Image upload failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func uploadDropped(data: Data, name: String, asCover: Bool) async {
+        guard let repo = model.site.repo else { return }
+        doc.uploadingImage = true
+        defer { doc.uploadingImage = false }
+        guard let prepared = ImagePipeline.prepare(data: data, suggestedName: name) else {
+            doc.statusLine = "Could not read that image."
+            return
+        }
+        do {
+            let path = try await ImagePipeline.upload(repo: repo, slug: doc.slug, prepared: prepared)
+            if asCover {
+                doc.heroImagePath = path
+                doc.recomputeDirty()
+            } else {
+                let stem = prepared.filename.components(separatedBy: ".").first ?? "image"
+                wysiwyg.insert(markdown: "![\(stem)](\(path))")
+            }
+            doc.statusLine = "Image committed: \(path)"
+        } catch {
+            doc.statusLine = "Image upload failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider], asCover: Bool) -> Bool {
+        guard let provider = providers.first else { return false }
+        if provider.hasItemConformingToTypeIdentifier("public.file-url") {
+            provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                var url: URL?
+                if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) }
+                else if let u = item as? URL { url = u }
+                guard let fileURL = url, let data = try? Data(contentsOf: fileURL) else { return }
+                Task { @MainActor in
+                    await uploadDropped(data: data, name: fileURL.lastPathComponent, asCover: asCover)
+                }
+            }
+            return true
+        }
+        if provider.hasItemConformingToTypeIdentifier("public.image") {
+            provider.loadDataRepresentation(forTypeIdentifier: "public.image") { data, _ in
+                guard let data = data else { return }
+                Task { @MainActor in
+                    await uploadDropped(data: data, name: "dropped.png", asCover: asCover)
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    private func loadCoverThumbnail() async {
+        coverImage = nil
+        guard let repo = model.site.repo, !doc.heroImagePath.isEmpty else { return }
+        let repoPath = doc.heroImagePath.hasPrefix("/") ? String(doc.heroImagePath.dropFirst()) : doc.heroImagePath
+        guard let f = try? await GitHubAPI.file(repo: repo, path: repoPath),
+              let content = f.content,
+              let data = Data(base64Encoded: content.replacingOccurrences(of: "\n", with: "")) else { return }
+        coverImage = NSImage(data: data)
+    }
+
+    // MARK: Chrome
 
     private var header: some View {
         HStack(spacing: 10) {
@@ -437,11 +633,35 @@ struct EditorView: View {
                 Circle().fill(Color.brandGold).frame(width: 7, height: 7)
                     .help("Unsaved changes")
             }
+            if doc.uploadingImage {
+                ProgressView().controlSize(.small)
+                Text("Uploading image…").font(.caption).foregroundColor(.textSecondary)
+            }
             Spacer()
 
-            modeButton(.editorOnly, icon: "square.lefthalf.filled", key: "1", help: "Editor only (⌘1)")
-            modeButton(.split, icon: "rectangle.split.2x1", key: "2", help: "Split (⌘2)")
-            modeButton(.previewOnly, icon: "square.righthalf.filled", key: "3", help: "Preview only (⌘3)")
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() }
+            } label: {
+                Image(systemName: chrome.focus ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .foregroundColor(chrome.focus ? .brandNavy : .textSecondary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .help("Focus mode (⌘⇧F)")
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { showQuality.toggle() }
+            } label: {
+                Image(systemName: "checklist")
+                    .foregroundColor(showQuality ? .brandNavy : .textSecondary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("i", modifiers: .command)
+            .help("Writing-quality panel (⌘I)")
+
+            modeButton(.editorOnly, icon: "square.and.pencil", key: "1", help: "Editor only (⌘1)")
+            modeButton(.split, icon: "rectangle.split.2x1", key: "2", help: "Editor + preview (⌘2)")
+            modeButton(.previewOnly, icon: "doc.richtext", key: "3", help: "Preview only (⌘3)")
 
             Button {
                 Task { if let repo = model.site.repo { await doc.save(repo: repo) } }
@@ -457,7 +677,7 @@ struct EditorView: View {
     private func modeButton(_ m: EditorMode, icon: String, key: KeyEquivalent, help: String) -> some View {
         Button { mode = m } label: {
             Image(systemName: icon)
-                .foregroundColor(mode == m ? .brandNavy : .secondary)
+                .foregroundColor(mode == m ? .brandNavy : .textSecondary)
         }
         .buttonStyle(.plain)
         .keyboardShortcut(key, modifiers: .command)
@@ -466,23 +686,26 @@ struct EditorView: View {
 
     private var frontmatterForm: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 10) {
-                fmField("Title", text: $doc.title, locked: doc.opaqueKeys.contains("title"))
-            }
-            HStack(spacing: 10) {
-                fmField("Date", text: $doc.dateStr, locked: doc.opaqueKeys.contains("date"))
-                    .frame(width: 150)
-                fmField("Author", text: $doc.author, locked: doc.opaqueKeys.contains("author"))
-                    .frame(width: 200)
-                Toggle("Draft", isOn: $doc.isDraft)
-                    .toggleStyle(.switch)
-                    .disabled(doc.opaqueKeys.contains("draft") && doc.opaqueKeys.contains("status"))
-                    .help("Draft on = draft: true / status: draft. Off = published.")
-                Spacer()
-            }
-            HStack(spacing: 10) {
-                fmField("Description", text: $doc.descriptionText, locked: doc.opaqueKeys.contains("description"))
-                fmField("Tags (comma-separated)", text: $doc.tagsCSV, locked: doc.opaqueKeys.contains("tags"))
+            HStack(alignment: .top, spacing: 12) {
+                VStack(spacing: 8) {
+                    fmField("Title", text: $doc.title, locked: doc.opaqueKeys.contains("title"))
+                    HStack(spacing: 10) {
+                        fmField("Date", text: $doc.dateStr, locked: doc.opaqueKeys.contains("date"))
+                            .frame(width: 140)
+                        fmField("Author", text: $doc.author, locked: doc.opaqueKeys.contains("author"))
+                            .frame(width: 180)
+                        Toggle("Draft", isOn: $doc.isDraft)
+                            .toggleStyle(.switch)
+                            .disabled(doc.opaqueKeys.contains("draft") && doc.opaqueKeys.contains("status"))
+                            .help("Draft on = draft: true / status: draft. Off = published.")
+                        Spacer()
+                    }
+                    HStack(spacing: 10) {
+                        fmField("Description", text: $doc.descriptionText, locked: doc.opaqueKeys.contains("description"))
+                        fmField("Tags (comma-separated)", text: $doc.tagsCSV, locked: doc.opaqueKeys.contains("tags"))
+                    }
+                }
+                coverWell
             }
             if !doc.opaqueKeys.isEmpty {
                 HStack {
@@ -502,6 +725,39 @@ struct EditorView: View {
         .onChange(of: doc.isDraft) { _ in doc.recomputeDirty() }
     }
 
+    /// Cover-image well: shows the current hero image, accepts a drop to
+    /// replace it (same upload pipeline → writes frontmatter hero_image).
+    private var coverWell: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Cover image").font(.caption2.weight(.semibold)).foregroundColor(.textSecondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.bgPage)
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(dropTargeted ? Color.accentNavy : Color.cardBorder,
+                                  style: StrokeStyle(lineWidth: dropTargeted ? 2 : 1, dash: coverImage == nil ? [4] : []))
+                if let img = coverImage {
+                    Image(nsImage: img)
+                        .resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: 148, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                } else {
+                    VStack(spacing: 2) {
+                        Image(systemName: "photo").foregroundColor(.textSecondary)
+                        Text(doc.heroImagePath.isEmpty ? "Drop cover here" : "Loading…")
+                            .font(.caption2).foregroundColor(.textSecondary)
+                    }
+                }
+            }
+            .frame(width: 150, height: 66)
+            .onDrop(of: ["public.file-url", "public.image"], isTargeted: $dropTargeted) { providers in
+                handleDrop(providers, asCover: true)
+            }
+            .help(doc.heroImagePath.isEmpty ? "Drop an image to set the cover (hero_image)" : doc.heroImagePath)
+            .disabled(doc.opaqueKeys.contains("hero_image"))
+        }
+    }
+
     private func fmField(_ label: String, text: Binding<String>, locked: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption2.weight(.semibold)).foregroundColor(.textSecondary)
@@ -512,29 +768,36 @@ struct EditorView: View {
     }
 
     @ViewBuilder private var editorArea: some View {
-        switch mode {
-        case .editorOnly:
-            markdownEditor
-        case .previewOnly:
-            WebViewRepresentable(webView: model.preview.webView)
-        case .split:
-            HSplitView {
-                markdownEditor.frame(minWidth: 320)
-                WebViewRepresentable(webView: model.preview.webView).frame(minWidth: 320)
+        if chrome.focus {
+            // Focus mode: just the writing surface, centered at 720 pt.
+            HStack {
+                Spacer(minLength: 0)
+                wysiwygEditor.frame(maxWidth: 720)
+                Spacer(minLength: 0)
+            }
+            .background(Color.bgCard)
+        } else {
+            switch mode {
+            case .editorOnly:
+                wysiwygEditor
+            case .previewOnly:
+                WebViewRepresentable(webView: model.preview.webView)
+            case .split:
+                HSplitView {
+                    wysiwygEditor.frame(minWidth: 340)
+                    WebViewRepresentable(webView: model.preview.webView).frame(minWidth: 320)
+                }
             }
         }
     }
 
-    private var markdownEditor: some View {
-        TextEditor(text: $doc.bodyText)
-            .font(.system(size: 13, design: .monospaced))
-            .lineSpacing(2.5)
-            .padding(.horizontal, 6)
-            .onChange(of: doc.bodyText) { newValue in
-                doc.recomputeDirty()
-                model.preview.update(markdown: newValue)
+    /// The Toast UI WYSIWYG surface (markdown power-mode via its built-in
+    /// mode switch). Accepts image drops from Finder / Canva exports.
+    private var wysiwygEditor: some View {
+        WebViewRepresentable(webView: wysiwyg.webView)
+            .onDrop(of: ["public.file-url", "public.image"], isTargeted: .constant(false)) { providers in
+                handleDrop(providers, asCover: false)
             }
-            .onAppear { model.preview.renderNow(doc.bodyText) }
     }
 
     private var footer: some View {

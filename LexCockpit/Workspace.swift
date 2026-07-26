@@ -5,13 +5,14 @@ import UniformTypeIdentifiers
 // MARK: - Tabs
 
 enum WorkspaceTab: String, CaseIterable, Identifiable {
-    case overview, content, cms, deploys, repo
+    case overview, content, cms, design, deploys, repo
     var id: String { rawValue }
     var title: String {
         switch self {
         case .overview: return "Overview"
         case .content:  return "Content"
         case .cms:      return "CMS"
+        case .design:   return "Design"
         case .deploys:  return "Deploys"
         case .repo:     return "Repo"
         }
@@ -21,6 +22,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
         case .overview: return "square.grid.2x2"
         case .content:  return "doc.text"
         case .cms:      return "globe"
+        case .design:   return "paintbrush"
         case .deploys:  return "arrow.up.circle"
         case .repo:     return "chevron.left.forwardslash.chevron.right"
         }
@@ -130,12 +132,18 @@ struct WorkspaceView: View {
         _model = StateObject(wrappedValue: WorkspaceModel.shared(for: site))
     }
 
+    @EnvironmentObject var chrome: ChromeModel
+
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-            Divider()
+            if !chrome.focus {
+                topBar
+                Divider()
+            }
             content
         }
+        .animation(.easeInOut(duration: 0.15), value: tab)
+        .animation(.easeInOut(duration: 0.15), value: chrome.focus)
         .background(Color.brandCream)
     }
 
@@ -206,6 +214,7 @@ struct WorkspaceView: View {
         case .overview: OverviewTabView(site: site)
         case .content:  ContentTabView(model: model, openDeploys: { tab = .deploys })
         case .cms:      CMSTabView(site: site)
+        case .design:   DesignTabView()
         case .deploys:  DeploysTabView(model: model)
         case .repo:     RepoTabView(model: model)
         }

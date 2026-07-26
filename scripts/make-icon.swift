@@ -20,6 +20,10 @@ func drawIcon(size: Int) -> NSBitmapImageRep {
     let path = NSBezierPath(roundedRect: rect, xRadius: s * 0.2, yRadius: s * 0.2)
     navy.setFill()
     path.fill()
+    // faint light keyline so the tile keeps its edge on dark backgrounds
+    NSColor(white: 1.0, alpha: 0.18).setStroke()
+    path.lineWidth = max(s * 0.01, 0.5)
+    path.stroke()
 
     // gold baseline accent
     let barH = max(s * 0.025, 1)
