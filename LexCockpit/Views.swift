@@ -35,7 +35,16 @@ struct FeedStateView: View {
     let isEmpty: Bool
 
     var body: some View {
-        if let failure = store.feedErrors[kind] {
+        if let staleDate = store.feedStale[kind] {
+            Card {
+                HStack(spacing: 8) {
+                    Image(systemName: "wifi.slash").foregroundColor(.statusAmber)
+                    Text("Offline — data from \(relativeTime(ISO8601DateFormatter().string(from: staleDate)))")
+                        .font(.caption).foregroundColor(.statusAmber)
+                    Spacer()
+                }
+            }
+        } else if let failure = store.feedErrors[kind] {
             FeedErrorCard(title: "\(kind.title) feed", failure: failure)
         } else if isEmpty && store.feedLoaded.contains(kind) {
             Card { Text(emptyText).foregroundColor(.textSecondary) }

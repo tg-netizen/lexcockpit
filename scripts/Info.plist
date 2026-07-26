@@ -30,6 +30,19 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Markdown Document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleTypeExtensions</key>
+            <array><string>md</string><string>markdown</string></array>
+            <key>LSItemContentTypes</key>
+            <array><string>net.daringfireball.markdown</string><string>public.plain-text</string></array>
+        </dict>
+    </array>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 LexDigestGlobal · Made in Vienna</string>
 </dict>

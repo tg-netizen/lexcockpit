@@ -279,7 +279,7 @@ struct ProjectsFile: Decodable {
 
 /// One website project = one workspace (Overview · Content · CMS · Deploys · Repo).
 /// Secrets never live here — tokens are in the macOS Keychain.
-struct SiteProject: Decodable, Identifiable, Hashable {
+struct SiteProject: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let url: String?               // https://lexdigestglobal.com

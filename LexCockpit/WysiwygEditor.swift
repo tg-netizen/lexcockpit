@@ -43,6 +43,8 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     var onChange: ((String) -> Void)?
     /// Called when an image lands in the editor (paste or drop inside webview).
     var onImage: ((_ id: String, _ name: String, _ data: Data) -> Void)?
+    /// Right-click on an image inside the editor (src passed through).
+    var onImageMenu: ((String) -> Void)?
 
     private var pendingLoad: String?
 
@@ -67,6 +69,11 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     }
 
     func insert(markdown: String) { call("insertMarkdown", markdown) }
+
+    /// Push the block palette into the shell for the slash menu.
+    func installBlocks(json: String) {
+        webView.evaluateJavaScript("window.__blocks = \(json); undefined;", completionHandler: nil)
+    }
 
     func imageUploaded(id: String, path: String) {
         guard let idJSON = Self.json(id), let pathJSON = Self.json(path) else { return }
@@ -102,6 +109,8 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
             if let pending = pendingLoad { pendingLoad = nil; call("loadMarkdown", pending) }
         case "change":
             if let md = body["md"] as? String { onChange?(md) }
+        case "imgmenu":
+            if let src = body["src"] as? String { onImageMenu?(src) }
         case "image":
             if let id = body["id"] as? String,
                let name = body["name"] as? String,
@@ -133,6 +142,20 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
       .toastui-editor-contents blockquote { border-left: 3px solid #C9B58C; color: #444; }
       .toastui-editor-contents code { background: #f4f2ec; }
       .toastui-editor-contents img { max-width: 100%; }
+      .toastui-editor-contents .pull-quote { border-left: 3px solid #C9B58C;
+        padding: 0.75rem 0 0.75rem 1.25rem; margin: 1.5rem 0; font-style: italic; font-size: 1.2em; }
+      .toastui-editor-contents .callout { border: 1px solid #d5e3f5; background: #eef4fc;
+        border-radius: 8px; padding: 0.6rem 1rem; margin: 1.2rem 0; }
+      .toastui-editor-contents .callout--warn { border-color: #f0dcb8; background: #fdf6e7; }
+      .toastui-editor-contents .keyfacts { border: 1px solid #E5E7EB; background: #FAFAF8;
+        border-radius: 8px; padding: 0.7rem 1rem; margin: 1.2rem 0; }
+      .toastui-editor-contents figcaption { font-size: 0.85em; color: #6B7280;
+        font-family: 'Inter', sans-serif; margin-top: 4px; }
+      #slashmenu { position: fixed; z-index: 999; background: #fff; border: 1px solid #E5E7EB;
+        border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); display: none;
+        font-family: 'Inter', sans-serif; font-size: 13px; min-width: 190px; }
+      #slashmenu div { padding: 7px 12px; cursor: pointer; }
+      #slashmenu div.sel { background: #EDF1F7; color: #1F3A5F; }
       .toastui-editor-md-container .toastui-editor md-preview { display: none; }
     </style>
     <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
@@ -196,6 +219,71 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         var cb = imageCallbacks[id];
         if (cb) { cb(path, ''); delete imageCallbacks[id]; }
       };
+
+      // ── Slash menu (type "/" on an empty line) ─────────────────
+      window.__blocks = window.__blocks || [];
+      var menu = document.createElement('div');
+      menu.id = 'slashmenu';
+      document.body.appendChild(menu);
+      var menuIdx = 0;
+
+      function hideMenu() { menu.style.display = 'none'; }
+      function renderMenu() {
+        menu.innerHTML = '';
+        window.__blocks.forEach(function (b, i) {
+          var row = document.createElement('div');
+          row.textContent = b.label;
+          if (i === menuIdx) row.className = 'sel';
+          row.onmousedown = function (ev) { ev.preventDefault(); chooseBlock(i); };
+          menu.appendChild(row);
+        });
+      }
+      function chooseBlock(i) {
+        var b = window.__blocks[i];
+        hideMenu();
+        if (!b) return;
+        // remove the typed "/" then insert the block markup
+        try { editor.replaceSelection('', [1, 1], [1, 1]); } catch (e) {}
+        try {
+          var sel = editor.getSelection();
+          editor.replaceSelection(b.md);
+        } catch (e) { editor.insertText(b.md); }
+      }
+      document.addEventListener('keydown', function (ev) {
+        var open = menu.style.display === 'block';
+        if (open) {
+          if (ev.key === 'ArrowDown') { ev.preventDefault(); menuIdx = (menuIdx + 1) % window.__blocks.length; renderMenu(); return; }
+          if (ev.key === 'ArrowUp') { ev.preventDefault(); menuIdx = (menuIdx + window.__blocks.length - 1) % window.__blocks.length; renderMenu(); return; }
+          if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); chooseBlock(menuIdx); return; }
+          if (ev.key === 'Escape') { hideMenu(); return; }
+          if (ev.key.length === 1 || ev.key === 'Backspace') { hideMenu(); }
+          return;
+        }
+        if (ev.key === '/') {
+          var sel = window.getSelection();
+          if (!sel || !sel.anchorNode) return;
+          var text = (sel.anchorNode.textContent || '').trim();
+          if (text !== '') return;             // only on empty lines
+          var rect = sel.getRangeAt(0).getBoundingClientRect();
+          menuIdx = 0;
+          renderMenu();
+          menu.style.left = Math.min(rect.left, window.innerWidth - 210) + 'px';
+          menu.style.top = (rect.bottom + 6) + 'px';
+          menu.style.display = 'block';
+        }
+      }, true);
+      document.addEventListener('mousedown', function (ev) {
+        if (!menu.contains(ev.target)) hideMenu();
+      });
+
+      // ── Image context menu → Swift ─────────────────────────────
+      document.addEventListener('contextmenu', function (ev) {
+        var t = ev.target;
+        if (t && t.tagName === 'IMG') {
+          ev.preventDefault();
+          bridge.postMessage({ type: 'imgmenu', src: t.getAttribute('src') || '' });
+        }
+      });
 
       bridge.postMessage({ type: 'ready' });
     </script>

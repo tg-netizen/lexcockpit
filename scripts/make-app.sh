@@ -3,7 +3,7 @@
 # Usage: bash scripts/make-app.sh [version]   (default 0.2.0)
 set -euo pipefail
 
-VERSION="${1:-0.4.0}"
+VERSION="${1:-0.5.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

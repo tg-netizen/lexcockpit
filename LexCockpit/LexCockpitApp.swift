@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct LexCockpitApp: App {
+    @NSApplicationDelegateAdaptor(CockpitAppDelegate.self) private var appDelegate
     @StateObject private var store = CockpitStore()
 
     init() {
@@ -52,6 +53,85 @@ struct LexCockpitApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}   // no "New Window"
         }
+
+        // Multi-window article editing ("Open in New Window" / dock drops)
+        WindowGroup(id: "article", for: ArticleRef.self) { $ref in
+            if let ref = ref {
+                ArticleWindowView(ref: ref)
+                    .frame(minWidth: 860, minHeight: 560)
+            }
+        }
+
+        // Read-only viewer for .md files dropped from outside any project
+        WindowGroup(id: "localmd", for: URL.self) { $url in
+            if let url = url { LocalMarkdownWindow(url: url) }
+        }
+    }
+}
+
+// MARK: - Article in its own window (independent editor + save path)
+
+struct ArticleWindowView: View {
+    let ref: ArticleRef
+    @StateObject private var model: WorkspaceModel
+    @StateObject private var doc: EditorDocument
+    @StateObject private var chrome = ChromeModel()
+    @State private var loaded = false
+
+    init(ref: ArticleRef) {
+        self.ref = ref
+        _model = StateObject(wrappedValue: WorkspaceModel.shared(for: ref.site))
+        _doc = StateObject(wrappedValue: EditorDocument(
+            repoPath: ref.path, text: "", sha: nil, isNew: false))
+    }
+
+    var body: some View {
+        Group {
+            if loaded {
+                EditorView(model: model, doc: doc, openDeploys: {})
+            } else {
+                ProgressView("Loading \(ref.path)…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .environmentObject(chrome)
+        .task {
+            guard let repo = ref.site.repo,
+                  let f = try? await GitHubAPI.file(repo: repo, path: ref.path),
+                  let text = f.decodedText() else { return }
+            let fresh = EditorDocument(repoPath: ref.path, text: text, sha: f.sha, isNew: false)
+            fresh.startAutosave()
+            // rebind the StateObject content by copying fields into doc
+            doc.adopt(fresh)
+            loaded = true
+        }
+    }
+}
+
+struct LocalMarkdownWindow: View {
+    let url: URL
+    @State private var text = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text").foregroundColor(.textSecondary)
+                Text(url.lastPathComponent).font(.system(.callout, design: .monospaced))
+                Text("· read-only — not inside a configured project")
+                    .font(.caption).foregroundColor(.textSecondary)
+                Spacer()
+            }
+            .padding(10)
+            Divider()
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 13, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(minWidth: 620, minHeight: 480)
+        .onAppear { text = (try? String(contentsOf: url, encoding: .utf8)) ?? "Could not read file." }
     }
 }
 
@@ -92,7 +172,9 @@ struct ContentView: View {
     @StateObject private var chrome = ChromeModel()
     @State private var selection: SidebarSelection? = .section(.dashboard)
     @State private var showSettings = false
+    @State private var showSwitcher = false
     @State private var columns = NavigationSplitViewVisibility.automatic
+    @Environment(\.openWindow) private var openWindow
 
     /// Flat ⌘1…⌘9 order: Dashboard, then projects, then topics.
     private var shortcutOrder: [SidebarSelection] {
@@ -133,9 +215,39 @@ struct ContentView: View {
                 }
             }
         }
+        .onAppear { NSApp.windows.first?.setFrameAutosaveName("LexCockpitMain") }
+        .sheet(isPresented: $showSwitcher) {
+            QuickSwitcherView(store: store, navigate: { sel in selection = sel },
+                              openArticle: { site, path in
+                                  openWindow(id: "article", value: ArticleRef(site: site, path: path))
+                              })
+        }
+        .background(
+            Button("") { showSwitcher = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        )
+        .onReceive(NotificationCenter.default.publisher(for: CockpitAppDelegate.openMDNotification)) { note in
+            guard let url = note.object as? URL else { return }
+            let name = url.lastPathComponent
+            for site in store.sites {
+                let model = WorkspaceModel.shared(for: site)
+                if let entry = model.contentEntries.first(where: { $0.name == name }) {
+                    openWindow(id: "article", value: ArticleRef(site: site, path: entry.path))
+                    return
+                }
+                if let dir = site.content_paths?.first, site.repo != nil,
+                   url.path.contains("/content/") {
+                    openWindow(id: "article", value: ArticleRef(site: site, path: dir + name))
+                    return
+                }
+            }
+            openWindow(id: "localmd", value: url)
+        }
         .task {
             await store.loadAll()
             await updates.check()
+            restoreSession()
             // Background refresh honoring the Settings interval (0 = manual).
             while !Task.isCancelled {
                 let minutes = store.refreshMinutes
@@ -156,6 +268,23 @@ struct ContentView: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 columns = focused ? .detailOnly : .automatic
             }
+        }
+    }
+
+    /// Restore selection / tab / article from the last session (silent —
+    /// openPath fetches a fresh SHA, so conflict logic only ever concerns
+    /// unsaved local edits, which autosave covers).
+    private func restoreSession() {
+        let hub = SessionHub.shared
+        defer { hub.flush() }
+        let s = hub.state
+        if let siteID = s.selectionSite, let site = store.sites.first(where: { $0.id == siteID }) {
+            selection = .site(siteID)
+            if let path = s.articlePath {
+                Task { await WorkspaceModel.shared(for: site).openPath(path) }
+            }
+        } else if let raw = s.selectionSection, let sec = CockpitSection(rawValue: raw) {
+            selection = .section(sec)
         }
     }
 
@@ -223,6 +352,14 @@ struct ContentView: View {
         let active = selection == target
         return Button {
             selection = target
+            switch target {
+            case .site(let id):
+                SessionHub.shared.state.selectionSite = id
+                SessionHub.shared.state.selectionSection = nil
+            case .section(let sec):
+                SessionHub.shared.state.selectionSection = sec.rawValue
+                SessionHub.shared.state.selectionSite = nil
+            }
         } label: {
             HStack(spacing: 0) {
                 RoundedRectangle(cornerRadius: 2)
@@ -266,5 +403,89 @@ struct ContentView: View {
                 Text("Project not found").foregroundColor(.textSecondary)
             }
         }
+    }
+}
+
+// MARK: - ⌘K quick switcher (native, fuzzy)
+
+struct QuickSwitcherView: View {
+    @ObservedObject var store: CockpitStore
+    var navigate: (SidebarSelection) -> Void
+    var openArticle: (SiteProject, String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var selected = 0
+
+    private struct Item: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let icon: String
+        let action: () -> Void
+    }
+
+    private var items: [Item] {
+        var out: [Item] = []
+        for sec in CockpitSection.allCases {
+            out.append(Item(id: "sec-" + sec.rawValue, title: sec.title, subtitle: "Section",
+                            icon: sec.icon, action: { navigate(.section(sec)) }))
+        }
+        for site in store.sites {
+            out.append(Item(id: "site-" + site.id, title: site.name, subtitle: "Project",
+                            icon: "globe", action: { navigate(.site(site.id)) }))
+            for entry in WorkspaceModel.shared(for: site).contentEntries {
+                out.append(Item(id: entry.path, title: entry.title,
+                                subtitle: entry.name, icon: "doc.text",
+                                action: { openArticle(site, entry.path) }))
+            }
+        }
+        guard !query.isEmpty else { return out }
+        let q = query.lowercased()
+        return out.filter { fuzzy(q, in: $0.title.lowercased()) || fuzzy(q, in: $0.subtitle.lowercased()) }
+    }
+
+    private func fuzzy(_ needle: String, in hay: String) -> Bool {
+        var idx = hay.startIndex
+        for ch in needle {
+            guard let found = hay[idx...].firstIndex(of: ch) else { return false }
+            idx = hay.index(after: found)
+        }
+        return true
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundColor(.textSecondary)
+                TextField("Jump to project, article or section…", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15))
+                    .onSubmit { fire(items.first) }
+            }
+            .padding(12)
+            Divider()
+            List {
+                ForEach(items.prefix(12)) { item in
+                    Button { fire(item) } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: item.icon).foregroundColor(.accentNavy).frame(width: 18)
+                            Text(item.title).foregroundColor(.textPrimary)
+                            Spacer()
+                            Text(item.subtitle).font(.caption).foregroundColor(.textSecondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.inset)
+        }
+        .frame(width: 520, height: 360)
+    }
+
+    private func fire(_ item: Item?) {
+        guard let item = item else { return }
+        item.action()
+        dismiss()
     }
 }

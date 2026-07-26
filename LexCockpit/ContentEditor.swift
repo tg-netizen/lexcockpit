@@ -42,6 +42,11 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var canvaCoverDesign: String = ""   // invisible frontmatter metadata
     @Published var uploadingImage = false
     @Published var restoreOffer: String?     // autosaved draft found on open
+    var restoreOfferDate: Date?
+    /// Imported Canva graphics [(design id, committed path)] — persisted as a
+    /// raw frontmatter block `canva_designs` (never shown in the form).
+    @Published var canvaDesigns: [(id: String, path: String)] = []
+    private var pendingCanvaLines: [String]?
     private var autosaveTimer: Timer?
 
     // Which fields are locked because their YAML shape is too complex to bind
@@ -83,6 +88,47 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.bodyText = doc.body
         self.heroImagePath = doc.scalar("hero_image") ?? ""
         self.canvaCoverDesign = doc.scalar("canva_cover_design") ?? ""
+        // parse canva_designs raw block: "- id: X" / "  path: Y" pairs
+        if let entry = doc.entries.first(where: { $0.key == "canva_designs" }) {
+            var pending: String?
+            for line in entry.rawLines.dropFirst() {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("- id:") { pending = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces) }
+                else if t.hasPrefix("path:"), let id = pending {
+                    canvaDesigns.append((id, String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)))
+                    pending = nil
+                }
+            }
+        }
+    }
+
+    /// Copy a freshly loaded document's state into this instance (used by
+    /// standalone article windows whose StateObject exists before the fetch).
+    func adopt(_ other: EditorDocument) {
+        loadedSHA = other.loadedSHA
+        fmDoc = other.exposedDoc
+        title = other.title; dateStr = other.dateStr; author = other.author
+        descriptionText = other.descriptionText; tagsCSV = other.tagsCSV
+        isDraft = other.isDraft; bodyText = other.bodyText
+        heroImagePath = other.heroImagePath
+        canvaCoverDesign = other.canvaCoverDesign
+        canvaDesigns = other.canvaDesigns
+        restoreOffer = other.restoreOffer
+        restoreOfferDate = other.restoreOfferDate
+        dirty = false
+        startAutosave()
+    }
+    var exposedDoc: FrontmatterDoc { fmDoc }
+
+    func appendCanvaDesign(id: String, path: String) {
+        canvaDesigns.append((id, path))
+        var lines = ["canva_designs:"]
+        for d in canvaDesigns {
+            lines.append("  - id: \(d.id)")
+            lines.append("    path: \(d.path)")
+        }
+        pendingCanvaLines = lines
+        recomputeDirty()
     }
 
     var slug: String {
@@ -127,6 +173,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             if isDraft, s != "scheduled" { doc.setScalar("status", "draft") }
             if !isDraft { doc.setScalar("status", "published") }
         }
+        if let lines = pendingCanvaLines { doc.setRawLines("canva_designs", lines) }
         doc.body = bodyText
         return doc.serialize()
     }
@@ -150,6 +197,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             loadedSHA = resp.content?.sha ?? loadedSHA
             lastCommitSHA = resp.commit.sha
             fmDoc = FrontmatterDoc.parse(text)      // new baseline
+            pendingCanvaLines = nil
             dirty = false
             clearDraft()                            // local autosave no longer needed
             statusLine = "Committed \(String(resp.commit.sha.prefix(7))) — Netlify build starts automatically"
@@ -194,7 +242,7 @@ final class EditorDocument: ObservableObject, Identifiable {
 
     func startAutosave() {
         autosaveTimer?.invalidate()
-        autosaveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        autosaveTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.autosaveNow() }
         }
     }
@@ -292,6 +340,8 @@ extension WorkspaceModel {
             // Crash-safety: offer an autosaved local draft if one differs.
             if let draft = try? String(contentsOf: doc.draftURL, encoding: .utf8), draft != text {
                 doc.restoreOffer = draft
+                doc.restoreOfferDate = (try? FileManager.default.attributesOfItem(
+                    atPath: doc.draftURL.path))?[.modificationDate] as? Date
             }
             attachEditor(doc)
         } catch {
@@ -319,6 +369,21 @@ extension WorkspaceModel {
     func closeEditor() {
         editor = nil
         editorDirty = false
+        SessionHub.shared.state.articlePath = nil
+    }
+
+    /// Restore an article by repo path (session restore / dock-open).
+    func openPath(_ path: String) async {
+        guard let repo = site.repo else { return }
+        if let f = try? await GitHubAPI.file(repo: repo, path: path), let text = f.decodedText() {
+            let doc = EditorDocument(repoPath: path, text: text, sha: f.sha, isNew: false)
+            if let draft = try? String(contentsOf: doc.draftURL, encoding: .utf8), draft != text {
+                doc.restoreOffer = draft
+                doc.restoreOfferDate = (try? FileManager.default.attributesOfItem(
+                    atPath: doc.draftURL.path))?[.modificationDate] as? Date
+            }
+            attachEditor(doc)
+        }
     }
 }
 
@@ -340,6 +405,7 @@ struct ContentTabView: View {
 
 struct ContentBrowserView: View {
     @ObservedObject var model: WorkspaceModel
+    @Environment(\.openWindow) private var openWindow
     @State private var search = ""
     @State private var showNewSheet = false
 
@@ -402,6 +468,11 @@ struct ContentBrowserView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 2)
+                    .contextMenu {
+                        Button("Open in New Window") {
+                            openWindow(id: "article", value: ArticleRef(site: model.site, path: entry.path))
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
@@ -463,6 +534,7 @@ struct EditorView: View {
 
     @EnvironmentObject var chrome: ChromeModel
     @StateObject private var wysiwyg = WysiwygController()
+    @StateObject private var preview = PreviewController()
     @State private var mode: EditorMode = .split
     @State private var confirmClose = false
     @State private var showQuality = false
@@ -472,6 +544,8 @@ struct EditorView: View {
     @State private var canvaSheet: CanvaSheetContext?
     @State private var canvaBusy = false
     @State private var showConnectHint = false
+    @State private var showCanvaPicker = false
+    @State private var pendingCanvaEdit: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -514,7 +588,7 @@ struct EditorView: View {
         } message: {
             Text("Someone (or Sveltia) committed a newer version of this file. Reload to take the remote version, or overwrite it with your copy.")
         }
-        .alert("Restore unsaved draft?", isPresented: $showRestore) {
+        .alert(restoreTitle, isPresented: $showRestore) {
             Button("Restore draft") {
                 doc.restoreDraft()
                 wysiwyg.load(markdown: doc.bodyText)
@@ -533,7 +607,31 @@ struct EditorView: View {
         .sheet(item: $canvaSheet) { ctx in
             CanvaDesignSheet(context: ctx) { data, name in
                 await uploadDropped(data: data, name: name, asCover: ctx.isCover)
+                if !ctx.isCover, let path = doc.statusLine?.components(separatedBy: "Image committed: ").last,
+                   path.hasPrefix("/") {
+                    doc.appendCanvaDesign(id: ctx.id, path: path)
+                }
                 doc.statusLine = ctx.isCover ? "Cover imported ✓" : "Graphic inserted ✓"
+            }
+        }
+        .onChange(of: mode) { m in SessionHub.shared.state.editorMode = m.rawValue }
+        .alert("Edit this graphic in Canva?", isPresented: Binding(
+            get: { pendingCanvaEdit != nil }, set: { if !$0 { pendingCanvaEdit = nil } })) {
+            Button("Edit in Canva") {
+                if let id = pendingCanvaEdit {
+                    Task {
+                        if let d = try? await CanvaAPI.design(id: id) {
+                            canvaSheet = CanvaSheetContext(id: d.id, editURL: d.editURL, isCover: false)
+                        }
+                    }
+                }
+                pendingCanvaEdit = nil
+            }
+            Button("Cancel", role: .cancel) { pendingCanvaEdit = nil }
+        }
+        .sheet(isPresented: $showCanvaPicker) {
+            CanvaPickerSheet { item in
+                Task { await importExistingDesign(item) }
             }
         }
         .alert("Connect Canva first", isPresented: $showConnectHint) {
@@ -544,6 +642,41 @@ struct EditorView: View {
     }
 
     // MARK: Canva design flows
+
+    private func openCanvaPreset(_ preset: CanvaPreset) {
+        guard CanvaAuth.shared.isConnected else { showConnectHint = true; return }
+        canvaBusy = true
+        Task {
+            defer { canvaBusy = false }
+            do {
+                let design = try await CanvaAPI.createDesign(width: preset.size.w, height: preset.size.h,
+                                                             title: "\(doc.slug) \(preset.slugSuffix)")
+                if preset.isCover {
+                    doc.canvaCoverDesign = design.id
+                    doc.recomputeDirty()
+                }
+                canvaSheet = CanvaSheetContext(id: design.id, editURL: design.editURL, isCover: preset.isCover)
+            } catch { doc.statusLine = error.localizedDescription }
+        }
+    }
+
+    private func importExistingDesign(_ item: CanvaDesignItem) async {
+        guard CanvaAuth.shared.isConnected else { showConnectHint = true; return }
+        doc.uploadingImage = true
+        defer { doc.uploadingImage = false }
+        do {
+            let jobID = try await CanvaAPI.startExport(designID: item.id)
+            let url = try await CanvaAPI.waitForExport(jobID: jobID)
+            let data = try await CanvaAPI.download(url)
+            guard let repo = model.site.repo,
+                  let prepared = ImagePipeline.prepare(data: data, suggestedName: (item.title ?? "design") + ".png")
+            else { return }
+            let path = try await ImagePipeline.upload(repo: repo, slug: doc.slug, prepared: prepared)
+            wysiwyg.insert(markdown: "![\(item.title ?? "design")](\(path))")
+            doc.appendCanvaDesign(id: item.id, path: path)
+            doc.statusLine = "Graphic inserted ✓"
+        } catch { doc.statusLine = error.localizedDescription }
+    }
 
     private func openCanva(asCover: Bool) {
         guard CanvaAuth.shared.isConnected else { showConnectHint = true; return }
@@ -572,6 +705,13 @@ struct EditorView: View {
         }
     }
 
+    private var restoreTitle: String {
+        if let d = doc.restoreOfferDate {
+            return "Restore unsaved draft from \(relativeTime(ISO8601DateFormatter().string(from: d)))?"
+        }
+        return "Restore unsaved draft?"
+    }
+
     // MARK: Bridge wiring (bodyText stays the single source the save path uses)
 
     private func wireBridge() {
@@ -582,13 +722,21 @@ struct EditorView: View {
             let wrapped = MarkdownEnvelope.rewrap(md, prefix: envelope.prefix, suffix: envelope.suffix)
             doc.bodyText = wrapped
             doc.recomputeDirty()
-            model.preview.update(markdown: wrapped)
+            preview.update(markdown: wrapped)
         }
         wysiwyg.onImage = { id, name, data in
             Task { await handleBridgeImage(id: id, name: name, data: data) }
         }
+        wysiwyg.onImageMenu = { src in
+            if let match = doc.canvaDesigns.first(where: { $0.path == src }) {
+                pendingCanvaEdit = match.id
+            }
+        }
         wysiwyg.load(markdown: doc.bodyText)
-        model.preview.renderNow(doc.bodyText)
+        wysiwyg.installBlocks(json: BlockKind.jsPayload)
+        preview.renderNow(doc.bodyText)
+        SessionHub.shared.state.articlePath = doc.repoPath
+        if let raw = SessionHub.shared.state.editorMode, let m = EditorMode(rawValue: raw) { mode = m }
     }
 
     // MARK: Image pipeline
@@ -690,15 +838,34 @@ struct EditorView: View {
             }
             Spacer()
 
-            Button {
-                openCanva(asCover: false)
+            Menu {
+                ForEach(BlockKind.allCases) { block in
+                    Button {
+                        wysiwyg.insert(markdown: block.markdown)
+                    } label: { Label(block.title, systemImage: block.icon) }
+                }
+            } label: {
+                Image(systemName: "plus.square")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 34)
+            .help("Insert block (or type “/” on an empty line)")
+
+            Menu {
+                ForEach(CanvaPreset.allCases) { preset in
+                    Button(preset.title) { openCanvaPreset(preset) }
+                }
+                Divider()
+                Button("From my Canva…") {
+                    if CanvaAuth.shared.isConnected { showCanvaPicker = true } else { showConnectHint = true }
+                }
             } label: {
                 Image(systemName: "paintbrush")
-                    .foregroundColor(.textSecondary)
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .frame(width: 34)
             .disabled(canvaBusy)
-            .help("Insert Canva graphic (1080×1080)")
+            .help("Canva graphics — presets or your recent designs")
 
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() }
@@ -853,11 +1020,11 @@ struct EditorView: View {
             case .editorOnly:
                 wysiwygEditor
             case .previewOnly:
-                WebViewRepresentable(webView: model.preview.webView)
+                WebViewRepresentable(webView: preview.webView)
             case .split:
                 HSplitView {
                     wysiwygEditor.frame(minWidth: 340)
-                    WebViewRepresentable(webView: model.preview.webView).frame(minWidth: 320)
+                    WebViewRepresentable(webView: preview.webView).frame(minWidth: 320)
                 }
             }
         }

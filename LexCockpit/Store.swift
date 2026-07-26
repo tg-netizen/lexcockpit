@@ -46,6 +46,8 @@ final class CockpitStore: ObservableObject {
     @Published var errorMessage: String?
 
     @Published var feedErrors: [FeedKind: FeedFailure] = [:]
+    /// Feeds currently showing CACHED data after a network failure.
+    @Published var feedStale: [FeedKind: Date] = [:]
     /// Feeds that have loaded successfully at least once — lets views
     /// distinguish "genuinely empty" from "failed or not yet loaded".
     @Published var feedLoaded: Set<FeedKind> = []
@@ -128,7 +130,14 @@ final class CockpitStore: ObservableObject {
         var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 20
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req)
+        } catch {
+            // Network down → serve the last successful payload with a badge.
+            if let cached: T = Self.decodeCached(kind, into: self) { return cached }
+            throw error
+        }
 
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             let hint = http.statusCode == 401
@@ -140,7 +149,17 @@ final class CockpitStore: ObservableObject {
         if head.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") {
             throw FeedError.notJSON(preview: head)
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        let decoded = try JSONDecoder().decode(T.self, from: data)
+        FeedCache.save(kind, data: data)
+        feedStale[kind] = nil
+        return decoded
+    }
+
+    private static func decodeCached<T: Decodable>(_ kind: FeedKind, into store: CockpitStore) -> T? {
+        guard let cached = FeedCache.load(kind),
+              let decoded = try? JSONDecoder().decode(T.self, from: cached.data) else { return nil }
+        Task { @MainActor in store.feedStale[kind] = cached.date }
+        return decoded
     }
 
     // MARK: Error rendering
@@ -196,8 +215,13 @@ final class CockpitStore: ObservableObject {
         #endif
     }
 
-    /// Loads the bundled sample projects.json on first launch (if none loaded yet).
+    /// Loads the user's own projects.json via its stored security-scoped
+    /// bookmark (zero dialogs on cold start), falling back to the bundle.
     func loadProjectsFromBundle() {
+        if projects.isEmpty, let url = BookmarkStore.resolve(BookmarkStore.projectsJSON) {
+            loadProjects(from: url)
+            if !projects.isEmpty { return }
+        }
         guard projects.isEmpty,
               let url = resourceBundle.url(forResource: "projects", withExtension: "json"),
               let data = try? Data(contentsOf: url),

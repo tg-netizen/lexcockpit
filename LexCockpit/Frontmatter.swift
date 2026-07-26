@@ -180,6 +180,19 @@ struct FrontmatterDoc {
         }
     }
 
+    /// Replace (or append) an entry as verbatim raw lines — used for
+    /// structured metadata blocks the form never shows (e.g. canva_designs).
+    mutating func setRawLines(_ key: String, _ lines: [String]) {
+        var entry = FMEntry(key: key, rawLines: lines, value: nil)
+        entry.edited = false          // serialize() emits rawLines verbatim
+        if let idx = entries.firstIndex(where: { $0.key == key }) {
+            entries[idx] = entry
+        } else {
+            entries.append(entry)
+        }
+        hadFrontmatter = true
+    }
+
     // MARK: Serialize
 
     func serialize() -> String {

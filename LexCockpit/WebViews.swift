@@ -252,6 +252,17 @@ final class PreviewController: NSObject, ObservableObject, WKNavigationDelegate 
         padding-left: 1rem; color: #444; }
       .cockpit-preview code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em;
         background: #f4f2ec; padding: 1px 4px; border-radius: 3px; }
+      .cockpit-preview .pull-quote { border-left: 3px solid #C9B58C;
+        padding: 0.75rem 0 0.75rem 1.25rem; margin: 2rem 0; font-family: 'Playfair Display', serif;
+        font-style: italic; font-size: 1.25rem; }
+      .cockpit-preview .callout { border: 1px solid #d5e3f5; background: #eef4fc;
+        border-radius: 8px; padding: 0.7rem 1.1rem; margin: 1.5rem 0; font-size: 0.95em; }
+      .cockpit-preview .callout--warn { border-color: #f0dcb8; background: #fdf6e7; }
+      .cockpit-preview .keyfacts { border: 1px solid #E5E7EB; background: #FAFAF8;
+        border-radius: 8px; padding: 0.8rem 1.1rem; margin: 1.5rem 0; }
+      .cockpit-preview figure { margin: 1.75rem 0; }
+      .cockpit-preview figcaption { font-family: 'Inter', sans-serif; font-size: 0.8rem;
+        color: #6B7280; margin-top: 6px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     </head><body>
