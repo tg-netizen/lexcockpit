@@ -320,5 +320,16 @@ func runFrontmatterSelfTests() -> Bool {
     expect(tpl.contains("draft: true") && tpl.contains("status: draft"), "template is a draft")
     expect(tpl.contains("slug: mein-laender-ueberblick"), "template slug transliterated")
 
+    // 7. PKCE S256 — RFC 7636 Appendix B reference vector.
+    expect(PKCE.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+           == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "PKCE S256 matches RFC 7636 vector")
+    let v = PKCE.makeVerifier()
+    expect(v.count >= 43 && v.count <= 128, "PKCE verifier length in RFC bounds")
+    expect(!v.contains("+") && !v.contains("/") && !v.contains("="), "PKCE verifier is base64url")
+
+    // 8. OAuth callback request-line parsing (incl. percent-decoding + state).
+    let q = OAuthLoopback.queryItems(fromRequestLine: "GET /callback?code=abc%2F123&state=xyz HTTP/1.1\r\nHost: x")
+    expect(q["code"] == "abc/123" && q["state"] == "xyz", "loopback parses code + state")
+
     return ok
 }

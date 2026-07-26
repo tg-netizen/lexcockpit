@@ -18,6 +18,22 @@ struct LexCockpitApp: App {
            CommandLine.arguments.indices.contains(i + 1) {
             RoundtripTest.start(dir: CommandLine.arguments[i + 1])
         }
+        // `--oauth-callback-test` → start the loopback listener with a known
+        // state and wait for one curl; verifies the real OAuth receiver.
+        if CommandLine.arguments.contains("--oauth-callback-test") {
+            Task {
+                do {
+                    let code = try await OAuthLoopback.waitForCallback(
+                        port: 8976, expectedState: "teststate", timeout: 20)
+                    print("CALLBACK code=\(code)")
+                    exit(code == "abc123" ? 0 : 1)
+                } catch {
+                    print("CALLBACK FAIL: \(error.localizedDescription)")
+                    exit(1)
+                }
+            }
+            dispatchMain()
+        }
         // Under `swift run` there is no app bundle — promote to a regular
         // foreground app so the window appears and takes focus.
         DispatchQueue.main.async {

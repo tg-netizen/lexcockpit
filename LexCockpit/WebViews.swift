@@ -162,7 +162,7 @@ struct DesignTabView: View {
             Divider()
             HStack(spacing: 6) {
                 Image(systemName: "arrow.down.doc").font(.caption).foregroundColor(.textSecondary)
-                Text("Design covers and social cards here — download, then drag the file into your article (Content tab). It uploads and embeds automatically.")
+                Text("Tip: use “Design cover in Canva” inside the article editor for automatic import — this full-screen tab is the manual fallback (download, then drag the file into your article).")
                     .font(.caption).foregroundColor(.textSecondary)
                 Spacer()
             }

@@ -39,6 +39,7 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var isDraft: Bool
     @Published var bodyText: String
     @Published var heroImagePath: String
+    @Published var canvaCoverDesign: String = ""   // invisible frontmatter metadata
     @Published var uploadingImage = false
     @Published var restoreOffer: String?     // autosaved draft found on open
     private var autosaveTimer: Timer?
@@ -63,7 +64,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.fmDoc = doc
 
         var opaque = Set<String>()
-        for key in ["title", "date", "author", "description", "draft", "status", "hero_image"] where doc.isOpaque(key) {
+        for key in ["title", "date", "author", "description", "draft", "status", "hero_image", "canva_cover_design"] where doc.isOpaque(key) {
             opaque.insert(key)
         }
         if doc.entries.first(where: { $0.key == "tags" }).map({ !$0.isBindableList }) == true {
@@ -81,6 +82,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.isDraft = draftField == "true" || statusField == "draft" || (isNew && draftField == nil && statusField == nil)
         self.bodyText = doc.body
         self.heroImagePath = doc.scalar("hero_image") ?? ""
+        self.canvaCoverDesign = doc.scalar("canva_cover_design") ?? ""
     }
 
     var slug: String {
@@ -112,6 +114,10 @@ final class EditorDocument: ObservableObject, Identifiable {
         }
         if !opaqueKeys.contains("hero_image"), !(heroImagePath.isEmpty && doc.scalar("hero_image") == nil) {
             doc.setScalar("hero_image", heroImagePath)
+        }
+        if !opaqueKeys.contains("canva_cover_design"),
+           !(canvaCoverDesign.isEmpty && doc.scalar("canva_cover_design") == nil) {
+            doc.setScalar("canva_cover_design", canvaCoverDesign)
         }
         // Draft toggle drives whichever fields the file (or template) uses.
         if !opaqueKeys.contains("draft"), doc.scalar("draft") != nil {
@@ -170,6 +176,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             isDraft = doc.scalar("draft") == "true" || doc.scalar("status") == "draft"
             bodyText = doc.body
             heroImagePath = doc.scalar("hero_image") ?? ""
+            canvaCoverDesign = doc.scalar("canva_cover_design") ?? ""
             dirty = false
             statusLine = "Reloaded the remote version."
         } catch {
@@ -214,6 +221,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         tagsCSV = (doc.list("tags") ?? []).joined(separator: ", ")
         isDraft = doc.scalar("draft") == "true" || doc.scalar("status") == "draft"
         heroImagePath = doc.scalar("hero_image") ?? heroImagePath
+        canvaCoverDesign = doc.scalar("canva_cover_design") ?? canvaCoverDesign
         bodyText = doc.body
         restoreOffer = nil
         recomputeDirty()
@@ -461,6 +469,9 @@ struct EditorView: View {
     @State private var dropTargeted = false
     @State private var coverImage: NSImage?
     @State private var showRestore = false
+    @State private var canvaSheet: CanvaSheetContext?
+    @State private var canvaBusy = false
+    @State private var showConnectHint = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -518,6 +529,46 @@ struct EditorView: View {
         .confirmationDialog("Discard unsaved changes?", isPresented: $confirmClose) {
             Button("Discard changes", role: .destructive) { model.closeEditor() }
             Button("Keep editing", role: .cancel) {}
+        }
+        .sheet(item: $canvaSheet) { ctx in
+            CanvaDesignSheet(context: ctx) { data, name in
+                await uploadDropped(data: data, name: name, asCover: ctx.isCover)
+                doc.statusLine = ctx.isCover ? "Cover imported ✓" : "Graphic inserted ✓"
+            }
+        }
+        .alert("Connect Canva first", isPresented: $showConnectHint) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Add your Canva Client ID + Secret and press “Connect Canva” in Settings (gear icon).")
+        }
+    }
+
+    // MARK: Canva design flows
+
+    private func openCanva(asCover: Bool) {
+        guard CanvaAuth.shared.isConnected else { showConnectHint = true; return }
+        canvaBusy = true
+        Task {
+            defer { canvaBusy = false }
+            do {
+                if asCover, !doc.canvaCoverDesign.isEmpty {
+                    // Re-edit: fetch a fresh edit URL for the stored design.
+                    let design = try await CanvaAPI.design(id: doc.canvaCoverDesign)
+                    canvaSheet = CanvaSheetContext(id: design.id, editURL: design.editURL, isCover: true)
+                } else if asCover {
+                    let design = try await CanvaAPI.createDesign(width: 1200, height: 630,
+                                                                 title: "\(doc.slug) cover")
+                    doc.canvaCoverDesign = design.id
+                    doc.recomputeDirty()
+                    canvaSheet = CanvaSheetContext(id: design.id, editURL: design.editURL, isCover: true)
+                } else {
+                    let design = try await CanvaAPI.createDesign(width: 1080, height: 1080,
+                                                                 title: "\(doc.slug) graphic")
+                    canvaSheet = CanvaSheetContext(id: design.id, editURL: design.editURL, isCover: false)
+                }
+            } catch {
+                doc.statusLine = error.localizedDescription
+            }
         }
     }
 
@@ -640,6 +691,16 @@ struct EditorView: View {
             Spacer()
 
             Button {
+                openCanva(asCover: false)
+            } label: {
+                Image(systemName: "paintbrush")
+                    .foregroundColor(.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(canvaBusy)
+            .help("Insert Canva graphic (1080×1080)")
+
+            Button {
                 withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() }
             } label: {
                 Image(systemName: chrome.focus ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
@@ -755,6 +816,17 @@ struct EditorView: View {
             }
             .help(doc.heroImagePath.isEmpty ? "Drop an image to set the cover (hero_image)" : doc.heroImagePath)
             .disabled(doc.opaqueKeys.contains("hero_image"))
+            Button {
+                openCanva(asCover: true)
+            } label: {
+                HStack(spacing: 4) {
+                    if canvaBusy { ProgressView().controlSize(.mini) }
+                    Text(doc.canvaCoverDesign.isEmpty ? "Design cover in Canva" : "Edit cover in Canva")
+                }
+                .font(.caption2)
+            }
+            .buttonStyle(.link)
+            .disabled(canvaBusy)
         }
     }
 

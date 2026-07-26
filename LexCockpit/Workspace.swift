@@ -600,6 +600,9 @@ struct SettingsSheet: View {
     @State private var saved = false
     @State private var feedBaseURL = UserDefaults.standard.string(forKey: "feedBaseURL") ?? ""
     @State private var refreshMinutes = max(UserDefaults.standard.integer(forKey: "refreshMinutes"), 0)
+    @State private var canvaID = ""
+    @State private var canvaSecret = ""
+    @ObservedObject private var canva = CanvaAuth.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -618,6 +621,46 @@ struct SettingsSheet: View {
             field("GitHub fine-grained PAT", text: $githubPAT,
                   hint: "github.com → Settings → Developer settings → Fine-grained tokens (Contents: read/write)",
                   present: Keychain.has(Keychain.githubPAT))
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Canva").font(.callout.weight(.semibold))
+                    if canva.connecting {
+                        ProgressView().controlSize(.small)
+                    } else if canva.needsReconnect {
+                        Label("Reconnect needed", systemImage: "exclamationmark.arrow.circlepath")
+                            .font(.caption).foregroundColor(.statusAmber)
+                    } else if canva.isConnected {
+                        Label("Connected as \(canva.displayName ?? "Canva account")",
+                              systemImage: "checkmark.seal.fill")
+                            .font(.caption).foregroundColor(.statusGreen)
+                    } else {
+                        Text("Not connected").font(.caption).foregroundColor(.textSecondary)
+                    }
+                    Spacer()
+                    if canva.isConnected && !canva.needsReconnect {
+                        Button("Disconnect") { canva.disconnect() }
+                    } else {
+                        Button(canva.needsReconnect ? "Reconnect Canva" : "Connect Canva") {
+                            if !canvaID.isEmpty { Keychain.set(Keychain.canvaClientID, canvaID); canvaID = "" }
+                            if !canvaSecret.isEmpty { Keychain.set(Keychain.canvaClientSecret, canvaSecret); canvaSecret = "" }
+                            Task { await canva.connect() }
+                        }
+                        .disabled(canva.connecting || (!canva.isConfigured && (canvaID.isEmpty || canvaSecret.isEmpty)))
+                    }
+                }
+                field("Canva Client ID", text: $canvaID,
+                      hint: "developer.canva.com → Your integrations (redirect: http://127.0.0.1:8976/callback)",
+                      present: Keychain.has(Keychain.canvaClientID))
+                field("Canva Client Secret", text: $canvaSecret,
+                      hint: "Sign-in opens in your default browser — never inside the app.",
+                      present: Keychain.has(Keychain.canvaClientSecret))
+                if let err = canva.lastError {
+                    Text(err).font(.caption2).foregroundColor(.statusRed)
+                }
+            }
 
             Divider()
 
