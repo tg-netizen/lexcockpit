@@ -1,0 +1,32 @@
+name: Release
+
+# Push a tag like v0.2.0 → build the .app on a macOS runner, ad-hoc sign,
+# zip, and attach it to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build LexCockpit.app
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash scripts/make-app.sh "$VERSION"
+
+      - name: Zip the app
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent LexCockpit.app "LexCockpit-${GITHUB_REF_NAME}.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/LexCockpit-*.zip
+          generate_release_notes: true

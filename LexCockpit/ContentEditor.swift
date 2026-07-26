@@ -286,7 +286,7 @@ struct ContentBrowserView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                Image(systemName: "magnifyingglass").foregroundColor(.textSecondary)
                 TextField("Search by title or filename…", text: $search)
                     .textFieldStyle(.plain)
                 if model.contentLoading { ProgressView().controlSize(.small) }
@@ -307,10 +307,10 @@ struct ContentBrowserView: View {
             } else if model.contentEntries.isEmpty && !model.contentLoading {
                 VStack(spacing: 8) {
                     Spacer()
-                    Image(systemName: "doc.text").font(.largeTitle).foregroundColor(.secondary)
+                    Image(systemName: "doc.text").font(.largeTitle).foregroundColor(.textSecondary)
                     Text("No articles loaded yet").font(.headline)
                     Text("Content is listed from the repo's content_paths via the GitHub API.")
-                        .font(.callout).foregroundColor(.secondary)
+                        .font(.callout).foregroundColor(.textSecondary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -322,10 +322,10 @@ struct ContentBrowserView: View {
                                 Text(entry.title).fontWeight(.medium).lineLimit(1)
                                 Text(entry.name)
                                     .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.secondary).lineLimit(1)
+                                    .foregroundColor(.textSecondary).lineLimit(1)
                             }
                             Spacer()
-                            Text(prettyDate(entry.date)).font(.caption).foregroundColor(.secondary)
+                            Text(prettyDate(entry.date)).font(.caption).foregroundColor(.textSecondary)
                             if entry.isDraft { Pill(text: "Draft", color: .brandNavy) }
                             else if entry.status == "scheduled" { Pill(text: "Scheduled", color: .stUpcoming) }
                             else if entry.status == "published" { Pill(text: "Published", color: .stApplied) }
@@ -353,8 +353,8 @@ struct NewArticleSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New article")
-                .font(.system(.title2, design: .serif).weight(.bold))
-                .foregroundColor(.brandNavy)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.textPrimary)
             TextField("Title", text: $title).textFieldStyle(.roundedBorder)
             TextField("Author (optional)", text: $author).textFieldStyle(.roundedBorder)
             if (model.site.content_paths ?? []).count > 1 {
@@ -364,7 +364,7 @@ struct NewArticleSheet: View {
             }
             if !title.isEmpty {
                 Text("→ \(todayISO())-\(slugify(title)).md  ·  created as a draft")
-                    .font(.system(.caption, design: .monospaced)).foregroundColor(.secondary)
+                    .font(.system(.caption, design: .monospaced)).foregroundColor(.textSecondary)
             }
             HStack {
                 Spacer()
@@ -432,7 +432,7 @@ struct EditorView: View {
 
             Text(doc.fileName)
                 .font(.system(.callout, design: .monospaced))
-                .foregroundColor(.secondary)
+                .foregroundColor(.textSecondary)
             if doc.dirty {
                 Circle().fill(Color.brandGold).frame(width: 7, height: 7)
                     .help("Unsaved changes")
@@ -487,13 +487,13 @@ struct EditorView: View {
             if !doc.opaqueKeys.isEmpty {
                 HStack {
                     Text("Locked (complex YAML, preserved untouched): \(doc.opaqueKeys.sorted().joined(separator: ", "))")
-                        .font(.caption2).foregroundColor(.secondary)
+                        .font(.caption2).foregroundColor(.textSecondary)
                     Spacer()
                 }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.bgCard)
         .onChange(of: doc.title) { _ in doc.recomputeDirty() }
         .onChange(of: doc.dateStr) { _ in doc.recomputeDirty() }
         .onChange(of: doc.author) { _ in doc.recomputeDirty() }
@@ -504,7 +504,7 @@ struct EditorView: View {
 
     private func fmField(_ label: String, text: Binding<String>, locked: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2.weight(.semibold)).foregroundColor(.secondary)
+            Text(label).font(.caption2.weight(.semibold)).foregroundColor(.textSecondary)
             TextField(label, text: text)
                 .textFieldStyle(.roundedBorder)
                 .disabled(locked)
@@ -540,17 +540,17 @@ struct EditorView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             if let line = doc.statusLine {
-                Text(line).font(.caption).foregroundColor(.secondary)
+                Text(line).font(.caption).foregroundColor(.textSecondary)
                 if doc.lastCommitSHA != nil {
                     Button("Open Deploys →") { openDeploys() }
                         .buttonStyle(.link).font(.caption)
                 }
             } else if doc.isNewFile && doc.lastCommitSHA == nil {
                 Text("New file — saving commits it to \(doc.repoPath)")
-                    .font(.caption).foregroundColor(.secondary)
+                    .font(.caption).foregroundColor(.textSecondary)
             } else {
                 Text(doc.dirty ? "Unsaved changes" : "No changes")
-                    .font(.caption).foregroundColor(.secondary)
+                    .font(.caption).foregroundColor(.textSecondary)
             }
             Spacer()
         }

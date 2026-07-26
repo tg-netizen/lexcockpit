@@ -144,8 +144,8 @@ struct WorkspaceView: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(site.name)
-                        .font(.system(.title, design: .serif).weight(.bold))
-                        .foregroundColor(.brandNavy)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.textPrimary)
                     if let urlStr = site.url, let url = URL(string: urlStr) {
                         Link(urlStr.replacingOccurrences(of: "https://", with: ""), destination: url)
                             .font(.caption)
@@ -164,7 +164,7 @@ struct WorkspaceView: View {
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 10)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.bgCard)
     }
 
     @ViewBuilder private var statusPill: some View {
@@ -172,7 +172,7 @@ struct WorkspaceView: View {
             HStack(spacing: 6) {
                 Circle().fill(deployColor(latest.stateKind)).frame(width: 8, height: 8)
                 Text(latest.state.capitalized).font(.caption.weight(.semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.textSecondary)
             }
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(Capsule().fill(Color.primary.opacity(0.05)))
@@ -237,8 +237,8 @@ struct OverviewTabView: View {
 
                 HStack {
                     Text("Editorial pipeline")
-                        .font(.system(.title2, design: .serif).weight(.bold))
-                        .foregroundColor(.brandNavy)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.textPrimary)
                     Spacer()
                     Button {
                         let panel = NSOpenPanel()
@@ -254,7 +254,7 @@ struct OverviewTabView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("No projects loaded").fontWeight(.semibold)
                             Text("Run `node scripts/build-projects.js` in your website repo, then open the generated projects.json above.")
-                                .foregroundColor(.secondary).font(.callout)
+                                .foregroundColor(.textSecondary).font(.callout)
                         }
                     }
                 } else {
@@ -267,13 +267,13 @@ struct OverviewTabView: View {
                                         if let t = p.type { Pill(text: t, color: .brandGold.opacity(0.9)) }
                                         Spacer()
                                         Text(prettyDate(p.scheduledPublishAt ?? p.date))
-                                            .font(.caption).foregroundColor(.secondary)
+                                            .font(.caption).foregroundColor(.textSecondary)
                                     }
                                     Text(p.title)
-                                        .font(.system(.title3, design: .serif).weight(.semibold))
-                                        .foregroundColor(.brandNavy)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.textPrimary)
                                     if let topic = p.topic, !topic.isEmpty {
-                                        Text(topic).font(.caption).foregroundColor(.secondary)
+                                        Text(topic).font(.caption).foregroundColor(.textSecondary)
                                     }
                                     if let u = p.url, !u.isEmpty, let url = URL(string: u) {
                                         Link("Open →", destination: url).font(.callout)
@@ -302,8 +302,8 @@ struct DeploysTabView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text("Latest deploys")
-                        .font(.system(.title2, design: .serif).weight(.bold))
-                        .foregroundColor(.brandNavy)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.textPrimary)
                     if model.deploysLoading { ProgressView().controlSize(.small) }
                     Spacer()
                     Button {
@@ -324,7 +324,7 @@ struct DeploysTabView: View {
                 }
 
                 if model.deploys.isEmpty && model.deploysError == nil && !model.deploysLoading {
-                    Card { Text("No deploys loaded yet.").foregroundColor(.secondary) }
+                    Card { Text("No deploys loaded yet.").foregroundColor(.textSecondary) }
                 }
 
                 VStack(spacing: 10) {
@@ -342,9 +342,9 @@ struct DeploysTabView: View {
                                         Text(d.state.capitalized).font(.caption)
                                             .foregroundColor(deployColor(d.stateKind))
                                         if let b = d.branch { Pill(text: b, color: .brandNavy) }
-                                        Text(relativeTime(d.created_at)).font(.caption).foregroundColor(.secondary)
+                                        Text(relativeTime(d.created_at)).font(.caption).foregroundColor(.textSecondary)
                                         if let secs = d.deploy_time {
-                                            Text("· \(secs)s build").font(.caption).foregroundColor(.secondary)
+                                            Text("· \(secs)s build").font(.caption).foregroundColor(.textSecondary)
                                         }
                                     }
                                     if let msg = d.error_message, !msg.isEmpty {
@@ -383,8 +383,8 @@ struct RepoTabView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Repository")
-                        .font(.system(.title2, design: .serif).weight(.bold))
-                        .foregroundColor(.brandNavy)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.textPrimary)
                     if let repo = model.site.repo {
                         Link(repo, destination: URL(string: "https://github.com/\(repo)")!)
                             .font(.caption)
@@ -400,8 +400,8 @@ struct RepoTabView: View {
 
                 if !model.pulls.isEmpty {
                     Text("Open pull requests")
-                        .font(.system(.title3, design: .serif).weight(.semibold))
-                        .foregroundColor(.brandNavy)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.textPrimary)
                     VStack(spacing: 8) {
                         ForEach(model.pulls) { pr in
                             Card {
@@ -411,7 +411,7 @@ struct RepoTabView: View {
                                         HStack(spacing: 8) {
                                             Pill(text: "#\(pr.number)", color: .brandNavy)
                                             Text(pr.head.ref).font(.system(.caption, design: .monospaced))
-                                                .foregroundColor(.secondary)
+                                                .foregroundColor(.textSecondary)
                                         }
                                     }
                                     Spacer()
@@ -425,8 +425,8 @@ struct RepoTabView: View {
                 }
 
                 Text("Last commits")
-                    .font(.system(.title3, design: .serif).weight(.semibold))
-                    .foregroundColor(.brandNavy)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.textPrimary)
                 VStack(spacing: 8) {
                     ForEach(model.commits) { c in
                         Card {
@@ -434,8 +434,8 @@ struct RepoTabView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(c.firstLine).fontWeight(.medium).lineLimit(1)
                                     HStack(spacing: 8) {
-                                        Text(c.commit.author?.name ?? "—").font(.caption).foregroundColor(.secondary)
-                                        Text(relativeTime(c.commit.author?.date)).font(.caption).foregroundColor(.secondary)
+                                        Text(c.commit.author?.name ?? "—").font(.caption).foregroundColor(.textSecondary)
+                                        Text(relativeTime(c.commit.author?.date)).font(.caption).foregroundColor(.textSecondary)
                                     }
                                 }
                                 Spacer()
@@ -460,8 +460,8 @@ struct RepoTabView: View {
 
                 if !model.dataFiles.isEmpty {
                     Text("Quick-edit /data/*.json")
-                        .font(.system(.title3, design: .serif).weight(.semibold))
-                        .foregroundColor(.brandNavy)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.textPrimary)
                     LazyVGrid(columns: grid(min: 220), spacing: 10) {
                         ForEach(model.dataFiles) { f in
                             Button { editingFile = f } label: {
@@ -525,7 +525,7 @@ struct JSONQuickEditSheet: View {
                 }
             Divider()
             HStack {
-                Text(status).font(.caption).foregroundColor(.secondary)
+                Text(status).font(.caption).foregroundColor(.textSecondary)
                 Spacer()
             }
             .padding(8)
@@ -589,14 +589,16 @@ struct SettingsSheet: View {
     @State private var buildHook = ""
     @State private var githubPAT = ""
     @State private var saved = false
+    @State private var feedBaseURL = UserDefaults.standard.string(forKey: "feedBaseURL") ?? ""
+    @State private var refreshMinutes = max(UserDefaults.standard.integer(forKey: "refreshMinutes"), 0)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("API tokens")
-                .font(.system(.title2, design: .serif).weight(.bold))
-                .foregroundColor(.brandNavy)
-            Text("Stored only in the macOS Keychain — never in files, code or logs.")
-                .font(.callout).foregroundColor(.secondary)
+            Text("Settings")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.textPrimary)
+            Text("Tokens are stored only in the macOS Keychain — never in files, code or logs.")
+                .font(.callout).foregroundColor(.textSecondary)
 
             field("Netlify personal access token", text: $netlifyPAT,
                   hint: "app.netlify.com → User settings → Applications → New access token",
@@ -608,6 +610,28 @@ struct SettingsSheet: View {
                   hint: "github.com → Settings → Developer settings → Fine-grained tokens (Contents: read/write)",
                   present: Keychain.has(Keychain.githubPAT))
 
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Feed base URL (override)").font(.callout.weight(.semibold))
+                TextField(CockpitStore.defaultBase, text: $feedBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                Text("Leave empty for the live site. While the site is password-protected you can serve a local copy (`python3 -m http.server 8899` in the website repo) and use http://localhost:8899/data/")
+                    .font(.caption2).foregroundColor(.textSecondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Refresh interval").font(.callout.weight(.semibold))
+                Picker("", selection: $refreshMinutes) {
+                    Text("Manual only").tag(0)
+                    Text("Every 5 min").tag(5)
+                    Text("Every 15 min").tag(15)
+                    Text("Every 30 min").tag(30)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
             HStack {
                 if saved { Label("Saved to Keychain", systemImage: "checkmark.circle.fill").foregroundColor(.stApplied) }
                 Spacer()
@@ -617,6 +641,10 @@ struct SettingsSheet: View {
                     if !buildHook.isEmpty { Keychain.set(Keychain.netlifyBuildHook, buildHook) }
                     if !githubPAT.isEmpty { Keychain.set(Keychain.githubPAT, githubPAT) }
                     netlifyPAT = ""; buildHook = ""; githubPAT = ""
+                    UserDefaults.standard.set(
+                        feedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                        forKey: "feedBaseURL")
+                    UserDefaults.standard.set(refreshMinutes, forKey: "refreshMinutes")
                     saved = true
                 }
                 .keyboardShortcut(.defaultAction)
@@ -637,7 +665,7 @@ struct SettingsSheet: View {
             }
             SecureField(present ? "•••••• (leave empty to keep)" : "Paste token…", text: text)
                 .textFieldStyle(.roundedBorder)
-            Text(hint).font(.caption2).foregroundColor(.secondary)
+            Text(hint).font(.caption2).foregroundColor(.textSecondary)
         }
     }
 }

@@ -21,3 +21,5 @@ xcuserdata/
 
 # Generated locally
 projects.local.json
+dist/
+scripts/AppIcon.iconset/

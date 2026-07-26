@@ -6,14 +6,32 @@ A SwiftUI Mac app with two dashboards:
 - **Topics** — all the regulatory data (Tracker, Pipeline, Trilogue, Enforcement),
   pulled live from the *same* public feeds the website uses, so it's always in sync.
 
-No third-party packages. No compliance-of-record, no advice — a read-only cockpit
-(watch + navigate), which keeps it on the safe side of the liability line.
+No third-party packages. External feeds stay read-only; your own projects get a
+read-write workspace (Content · CMS · Deploys · Repo).
 
 ---
 
-## Run it (≈5 minutes)
+## Install (download)
 
-You need a Mac with **Xcode 15+** (macOS 13 Ventura or newer).
+1. Grab the latest `LexCockpit-vX.Y.Z.zip` from **[Releases](https://github.com/tg-netizen/lexcockpit/releases)**.
+2. Unzip → drag `LexCockpit.app` to Applications (or run it from anywhere).
+3. First launch: **right-click the app → Open → Open**. The app is ad-hoc
+   signed, so Gatekeeper warns once — that's expected. (Notarization needs a
+   paid Apple Developer account and can be added later.)
+4. On launch the app checks the Releases feed and shows a small banner when a
+   newer version exists — no auto-update, you stay in control.
+
+Maintainer release flow: `git tag v0.2.0 && git push --tags` — GitHub Actions
+builds, ad-hoc signs and attaches the zip (`.github/workflows/release.yml`).
+Local dry-run: `bash scripts/make-app.sh 0.2.0` → `dist/LexCockpit.app`.
+
+Quickest run from source: `swift run LexCockpit` in the repo root.
+
+---
+
+## Run it in Xcode (≈5 minutes)
+
+You need a Mac with **Xcode 15+** (macOS 14 Sonoma or newer).
 
 1. **New project:** Xcode → *File ▸ New ▸ Project… ▸ macOS ▸ App*.
    - Product Name: `LexCockpit`

@@ -66,70 +66,160 @@ enum SidebarSelection: Hashable {
 
 struct ContentView: View {
     @EnvironmentObject var store: CockpitStore
+    @StateObject private var updates = UpdateChecker()
     @State private var selection: SidebarSelection? = .section(.dashboard)
     @State private var showSettings = false
 
-    var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
-                Section("Cockpit") {
-                    row(.dashboard)
-                }
-                Section("Projects") {
-                    ForEach(store.sites) { site in
-                        NavigationLink(value: SidebarSelection.site(site.id)) {
-                            Label(site.name, systemImage: "globe")
-                        }
-                    }
-                    if store.sites.isEmpty {
-                        Text("No projects yet")
-                            .font(.caption).foregroundColor(.secondary)
-                    }
-                }
-                Section("Topics") {
-                    row(.tracker)
-                    row(.pipeline)
-                    row(.trilogue)
-                    row(.enforcement)
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 215, max: 280)
-            .navigationTitle("LexCockpit")
-        } detail: {
-            detailView
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        Button {
-                            Task { await store.loadAll() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .help("Refresh feeds")
-                        .disabled(store.isLoading)
-                    }
-                    ToolbarItem(placement: .automatic) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
-                        }
-                        .help("API tokens (stored in the macOS Keychain)")
-                    }
-                    ToolbarItem(placement: .automatic) {
-                        if store.isLoading { ProgressView().controlSize(.small) }
-                    }
-                }
-        }
-        .task { await store.loadAll() }
-        .sheet(isPresented: $showSettings) { SettingsSheet() }
-        .background(Color.brandCream)
+    /// Flat ⌘1…⌘9 order: Dashboard, then projects, then topics.
+    private var shortcutOrder: [SidebarSelection] {
+        [.section(.dashboard)]
+            + store.sites.map { .site($0.id) }
+            + [.section(.tracker), .section(.pipeline), .section(.trilogue), .section(.enforcement)]
     }
 
-    private func row(_ s: CockpitSection) -> some View {
-        NavigationLink(value: SidebarSelection.section(s)) {
-            Label(s.title, systemImage: s.icon)
+    var body: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            VStack(spacing: 0) {
+                UpdateBanner(checker: updates)
+                detailView
+            }
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        Task { await store.loadAll() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .help("Refresh feeds (⌘R)")
+                    .disabled(store.isLoading)
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .help("Settings — tokens (Keychain), refresh, feed URL")
+                }
+                ToolbarItem(placement: .automatic) {
+                    if store.isLoading { ProgressView().controlSize(.small) }
+                }
+            }
         }
+        .task {
+            await store.loadAll()
+            await updates.check()
+            // Background refresh honoring the Settings interval (0 = manual).
+            while !Task.isCancelled {
+                let minutes = store.refreshMinutes
+                if minutes <= 0 {
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    continue
+                }
+                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60_000_000_000)
+                guard !Task.isCancelled else { break }
+                await store.loadAll()
+            }
+        }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
+        .background(Color.bgPage)
+        .background(sectionShortcuts)
+    }
+
+    /// Hidden buttons carrying ⌘1…⌘9 for fast section switching.
+    private var sectionShortcuts: some View {
+        ZStack {
+            ForEach(Array(shortcutOrder.prefix(9).enumerated()), id: \.offset) { index, target in
+                Button("") { selection = target }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+            }
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: Sidebar (light, eyebrow sections, navy active state)
+
+    private var sidebar: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                eyebrow("Cockpit")
+                sideRow(.section(.dashboard), title: CockpitSection.dashboard.title,
+                        icon: CockpitSection.dashboard.icon)
+
+                eyebrow("Projects").padding(.top, 14)
+                if store.sites.isEmpty {
+                    Text("No projects yet")
+                        .font(.caption).foregroundColor(.textSecondary)
+                        .padding(.horizontal, 14).padding(.vertical, 2)
+                } else {
+                    ForEach(store.sites) { site in
+                        sideRow(.site(site.id), title: site.name, icon: "globe")
+                    }
+                }
+
+                eyebrow("Topics").padding(.top, 14)
+                ForEach([CockpitSection.tracker, .pipeline, .trilogue, .enforcement]) { s in
+                    sideRow(.section(s), title: s.title, icon: s.icon)
+                }
+
+                Spacer(minLength: 20)
+                Text("v\(AppVersion.current)")
+                    .font(.caption2).foregroundColor(.textSecondary)
+                    .padding(.horizontal, 14).padding(.bottom, 8)
+            }
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Color.bgCard)
+        .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
+        .navigationTitle("LexCockpit")
+    }
+
+    private func eyebrow(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 11, weight: .semibold))
+            .tracking(0.6)
+            .foregroundColor(.textSecondary)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 2)
+    }
+
+    private func sideRow(_ target: SidebarSelection, title: String, icon: String) -> some View {
+        let active = selection == target
+        return Button {
+            selection = target
+        } label: {
+            HStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(active ? Color.accentNavy : .clear)
+                    .frame(width: 4, height: 20)
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.system(size: 13))
+                        .foregroundColor(active ? .accentNavy : .textSecondary)
+                        .frame(width: 18)
+                    Text(title)
+                        .font(.system(size: 13, weight: active ? .semibold : .regular))
+                        .foregroundColor(active ? .accentNavy : .textPrimary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 8)
+            }
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(active ? Color.navyTint : .clear)
+                    .padding(.horizontal, 6)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
     }
 
     @ViewBuilder private var detailView: some View {
@@ -143,7 +233,7 @@ struct ContentView: View {
             if let site = store.sites.first(where: { $0.id == id }) {
                 WorkspaceView(site: site).id(site.id)
             } else {
-                Text("Project not found").foregroundColor(.secondary)
+                Text("Project not found").foregroundColor(.textSecondary)
             }
         }
     }

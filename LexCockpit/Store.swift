@@ -1,9 +1,36 @@
 import Foundation
 import SwiftUI
 
-/// Single source of truth for the cockpit. Pulls the same public JSON feeds the
-/// website uses, so the app is always in sync with what you publish. Projects
-/// come from a local projects.json (your own work — not a public feed).
+// MARK: - Per-feed identity + failure
+
+enum FeedKind: String, CaseIterable, Identifiable {
+    case tracker, pipeline, trilogue, enforcement
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .tracker:     return "Tracker"
+        case .pipeline:    return "Pipeline"
+        case .trilogue:    return "Trilogue"
+        case .enforcement: return "Enforcement"
+        }
+    }
+    var file: String { rawValue + ".json" }
+}
+
+struct FeedFailure: Equatable {
+    let summary: String     // one legible line for the card
+    let detail: String      // developer-facing underlying error
+}
+
+enum FeedError: Error {
+    case http(Int, hint: String?)
+    case notJSON(preview: String)
+}
+
+// MARK: - Store
+
+/// Single source of truth. Each feed loads INDEPENDENTLY — one broken feed
+/// shows an inline error card in its own section and never blocks the rest.
 @MainActor
 final class CockpitStore: ObservableObject {
     @Published var regulations: [Regulation] = []
@@ -15,40 +42,150 @@ final class CockpitStore: ObservableObject {
 
     @Published var lastFetched: String = ""
     @Published var isLoading = false
+    /// projects.json problems only — feed problems are per-feed below.
     @Published var errorMessage: String?
 
-    /// Point this at production, or a local `python3 -m http.server` while developing.
-    private let base = "https://lexdigestglobal.com/data/"
+    @Published var feedErrors: [FeedKind: FeedFailure] = [:]
+    /// Feeds that have loaded successfully at least once — lets views
+    /// distinguish "genuinely empty" from "failed or not yet loaded".
+    @Published var feedLoaded: Set<FeedKind> = []
+
+    // MARK: Settings (non-secret → UserDefaults; tokens live in the Keychain)
+
+    static let defaultBase = "https://lexdigestglobal.com/data/"
+
+    var feedBase: String {
+        let raw = UserDefaults.standard.string(forKey: "feedBaseURL")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let base = raw.isEmpty ? Self.defaultBase : raw
+        return base.hasSuffix("/") ? base : base + "/"
+    }
+
+    /// 0 = manual only; default 15 when never set.
+    var refreshMinutes: Int {
+        if UserDefaults.standard.object(forKey: "refreshMinutes") == nil { return 15 }
+        return UserDefaults.standard.integer(forKey: "refreshMinutes")
+    }
+
+    // MARK: Loading
 
     func loadAll() async {
         isLoading = true
-        errorMessage = nil
-        do {
-            async let t = fetch("tracker.json", as: TrackerFeed.self)
-            async let p = fetch("pipeline.json", as: PipelineFeed.self)
-            async let g = fetch("trilogue.json", as: TrilogueFeed.self)
-            async let e = fetch("enforcement.json", as: EnforcementFeed.self)
-            let (tf, pf, gf, ef) = try await (t, p, g, e)
-            regulations = tf.data
-            lastFetched = tf.meta?.lastFetched ?? ""
-            pipeline    = pf.items
-            negotiations = gf.negotiations
-            cases       = ef.cases
-        } catch {
-            errorMessage = "Could not load feeds: \(error.localizedDescription)"
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.loadTracker() }
+            group.addTask { await self.loadPipeline() }
+            group.addTask { await self.loadTrilogue() }
+            group.addTask { await self.loadEnforcement() }
         }
         loadProjectsFromBundle()
         isLoading = false
     }
 
-    private func fetch<T: Decodable>(_ file: String, as type: T.Type) async throws -> T {
-        guard let url = URL(string: base + file) else { throw URLError(.badURL) }
+    private func loadTracker() async {
+        do {
+            let feed: TrackerFeed = try await fetch(.tracker)
+            regulations = feed.data
+            lastFetched = feed.meta?.lastFetched ?? ""
+            markLoaded(.tracker)
+        } catch { record(.tracker, error) }
+    }
+
+    private func loadPipeline() async {
+        do {
+            let feed: PipelineFeed = try await fetch(.pipeline)
+            pipeline = feed.items
+            markLoaded(.pipeline)
+        } catch { record(.pipeline, error) }
+    }
+
+    private func loadTrilogue() async {
+        do {
+            let feed: TrilogueFeed = try await fetch(.trilogue)
+            negotiations = feed.negotiations
+            markLoaded(.trilogue)
+        } catch { record(.trilogue, error) }
+    }
+
+    private func loadEnforcement() async {
+        do {
+            let feed: EnforcementFeed = try await fetch(.enforcement)
+            cases = feed.cases
+            markLoaded(.enforcement)
+        } catch { record(.enforcement, error) }
+    }
+
+    private func markLoaded(_ kind: FeedKind) {
+        feedLoaded.insert(kind)
+        feedErrors[kind] = nil
+    }
+
+    private func record(_ kind: FeedKind, _ error: Error) {
+        feedErrors[kind] = Self.describe(error, base: feedBase)
+    }
+
+    private func fetch<T: Decodable>(_ kind: FeedKind) async throws -> T {
+        guard let url = URL(string: feedBase + kind.file) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 20
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let hint = http.statusCode == 401
+                ? "The site is behind Netlify password protection. Disable it, or point the app at a local copy: Settings (gear) → Feed base URL, e.g. http://localhost:8899/data/ while running `python3 -m http.server 8899` in the website repo."
+                : nil
+            throw FeedError.http(http.statusCode, hint: hint)
+        }
+        let head = String(data: data.prefix(200), encoding: .utf8) ?? ""
+        if head.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") {
+            throw FeedError.notJSON(preview: head)
+        }
         return try JSONDecoder().decode(T.self, from: data)
     }
+
+    // MARK: Error rendering
+
+    static func describe(_ error: Error, base: String) -> FeedFailure {
+        switch error {
+        case FeedError.http(let code, let hint):
+            let summary = code == 401 ? "site is password-protected (HTTP 401)" : "server returned HTTP \(code)"
+            var detail = "GET \(base)… → HTTP \(code)."
+            if let hint = hint { detail += "\n\n\(hint)" }
+            return FeedFailure(summary: summary, detail: detail)
+        case FeedError.notJSON(let preview):
+            return FeedFailure(summary: "got an HTML page, not JSON",
+                               detail: "The response body starts with:\n\(preview)")
+        case let decoding as DecodingError:
+            return FeedFailure(summary: "feed format changed (decoding failed)",
+                               detail: Self.describeDecoding(decoding))
+        case let urlErr as URLError:
+            return FeedFailure(summary: "network error",
+                               detail: urlErr.localizedDescription)
+        default:
+            return FeedFailure(summary: "could not load",
+                               detail: String(describing: error))
+        }
+    }
+
+    private static func describeDecoding(_ e: DecodingError) -> String {
+        func path(_ ctx: DecodingError.Context) -> String {
+            ctx.codingPath.map { $0.intValue.map { "[\($0)]" } ?? $0.stringValue }.joined(separator: ".")
+        }
+        switch e {
+        case .keyNotFound(let key, let ctx):
+            return "Missing key '\(key.stringValue)' at \(path(ctx))"
+        case .typeMismatch(let type, let ctx):
+            return "Type mismatch (expected \(type)) at \(path(ctx)): \(ctx.debugDescription)"
+        case .valueNotFound(let type, let ctx):
+            return "Null where \(type) expected at \(path(ctx))"
+        case .dataCorrupted(let ctx):
+            return "Corrupted data at \(path(ctx)): \(ctx.debugDescription)"
+        @unknown default:
+            return String(describing: e)
+        }
+    }
+
+    // MARK: Projects file
 
     /// Resource bundle: Bundle.module under `swift run`, Bundle.main in Xcode.
     private var resourceBundle: Bundle {

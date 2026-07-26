@@ -1,10 +1,61 @@
 import Foundation
 
+// MARK: - Decoding armor
+//
+// The feeds are hand-edited JSON + generated data; the app must never lose a
+// whole dashboard section to one malformed item or a renamed optional field.
+// Strategy: every feed decodes through LossyArray (bad items are skipped, the
+// rest render) and every non-identity field is optional with safe fallbacks.
+
+/// Swallows any JSON value — used to skip past malformed array elements.
+struct AnyJSON: Decodable {
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.singleValueContainer()
+        if let c = c {
+            if c.decodeNil() { return }
+            if (try? c.decode(Bool.self)) != nil { return }
+            if (try? c.decode(Double.self)) != nil { return }
+            if (try? c.decode(String.self)) != nil { return }
+            if (try? c.decode([AnyJSON].self)) != nil { return }
+            if (try? c.decode([String: AnyJSON].self)) != nil { return }
+        }
+    }
+}
+
+/// Array that drops undecodable elements instead of failing the whole feed.
+struct LossyArray<Element: Decodable>: Decodable {
+    var elements: [Element] = []
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                elements.append(element)
+            } else {
+                _ = try? container.decode(AnyJSON.self)   // consume + skip
+            }
+        }
+    }
+}
+
+/// Accepts "2026-07-01", full ISO8601, or missing → normalized yyyy-MM-dd
+/// prefix (all app logic compares date strings lexicographically).
+func normalizedDate(_ raw: String?) -> String? {
+    guard let raw = raw, raw.count >= 10 else { return raw }
+    return String(raw.prefix(10))
+}
+
 // MARK: - Tracker (data/tracker.json)
 
 struct TrackerFeed: Decodable {
     let meta: TrackerMeta?
     let data: [Regulation]
+
+    enum CodingKeys: String, CodingKey { case meta, data }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        meta = try? c.decodeIfPresent(TrackerMeta.self, forKey: .meta)
+        data = (try? c.decode(LossyArray<Regulation>.self, forKey: .data))?.elements ?? []
+    }
 }
 
 struct TrackerMeta: Decodable {
@@ -32,6 +83,29 @@ struct Regulation: Decodable, Identifiable {
     let analysis_url: String?
     let transitionPhases: [Phase]?
 
+    enum CodingKeys: String, CodingKey {
+        case id, celex, name, area, date, applicationDate, dateInForce
+        case statusOverride, statusNote, sourceUrl, analysis_url, transitionPhases
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        celex = try? c.decodeIfPresent(String.self, forKey: .celex)
+        let rawName = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? nil
+        name = rawName ?? "Untitled regulation"
+        id = ((try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil)
+            ?? celex ?? rawName ?? UUID().uuidString
+        area = try? c.decodeIfPresent(String.self, forKey: .area)
+        date = normalizedDate(try? c.decodeIfPresent(String.self, forKey: .date))
+        applicationDate = normalizedDate(try? c.decodeIfPresent(String.self, forKey: .applicationDate))
+        dateInForce = normalizedDate(try? c.decodeIfPresent(String.self, forKey: .dateInForce))
+        statusOverride = try? c.decodeIfPresent(String.self, forKey: .statusOverride)
+        statusNote = try? c.decodeIfPresent(String.self, forKey: .statusNote)
+        sourceUrl = try? c.decodeIfPresent(String.self, forKey: .sourceUrl)
+        analysis_url = try? c.decodeIfPresent(String.self, forKey: .analysis_url)
+        transitionPhases = (try? c.decodeIfPresent(LossyArray<Phase>.self, forKey: .transitionPhases))??.elements
+    }
+
     var status: RegStatus {
         if (statusOverride ?? "").uppercased() == "BLOCKED" { return .blocked }
         guard let ad = applicationDate, ad.count >= 10 else { return .upcoming }
@@ -43,6 +117,13 @@ struct Phase: Decodable, Identifiable {
     let date: String
     let label: String
     var id: String { date + "|" + label }
+
+    enum CodingKeys: String, CodingKey { case date, label }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = normalizedDate((try? c.decodeIfPresent(String.self, forKey: .date)) ?? nil) ?? ""
+        label = ((try? c.decodeIfPresent(String.self, forKey: .label)) ?? nil) ?? "—"
+    }
 }
 
 // MARK: - Pipeline (data/pipeline.json)
@@ -50,6 +131,13 @@ struct Phase: Decodable, Identifiable {
 struct PipelineFeed: Decodable {
     let generated_at: String?
     let items: [PipelineItem]
+
+    enum CodingKeys: String, CodingKey { case generated_at, items }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated_at = try? c.decodeIfPresent(String.self, forKey: .generated_at)
+        items = (try? c.decode(LossyArray<PipelineItem>.self, forKey: .items))?.elements ?? []
+    }
 }
 
 struct PipelineItem: Decodable, Identifiable {
@@ -62,6 +150,23 @@ struct PipelineItem: Decodable, Identifiable {
     let priority: String?
     let brief: String?
     let have_your_say_url: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, type, status, planned_quarter, responsible_dg, priority, brief, have_your_say_url
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let rawTitle = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        title = rawTitle ?? "Untitled file"
+        id = ((try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil) ?? rawTitle ?? UUID().uuidString
+        type = try? c.decodeIfPresent(String.self, forKey: .type)
+        status = try? c.decodeIfPresent(String.self, forKey: .status)
+        planned_quarter = try? c.decodeIfPresent(String.self, forKey: .planned_quarter)
+        responsible_dg = try? c.decodeIfPresent(String.self, forKey: .responsible_dg)
+        priority = try? c.decodeIfPresent(String.self, forKey: .priority)
+        brief = try? c.decodeIfPresent(String.self, forKey: .brief)
+        have_your_say_url = try? c.decodeIfPresent(String.self, forKey: .have_your_say_url)
+    }
 }
 
 // MARK: - Trilogue (data/trilogue.json)
@@ -69,6 +174,13 @@ struct PipelineItem: Decodable, Identifiable {
 struct TrilogueFeed: Decodable {
     let generated_at: String?
     let negotiations: [Negotiation]
+
+    enum CodingKeys: String, CodingKey { case generated_at, negotiations }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated_at = try? c.decodeIfPresent(String.self, forKey: .generated_at)
+        negotiations = (try? c.decode(LossyArray<Negotiation>.self, forKey: .negotiations))?.elements ?? []
+    }
 }
 
 struct Negotiation: Decodable, Identifiable {
@@ -83,6 +195,26 @@ struct Negotiation: Decodable, Identifiable {
     let last_update: String?
     let oeil_url: String?
     let note: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, current_stage, next_session, sessions_held
+        case council_presidency, ep_rapporteur, sticking_points, last_update, oeil_url, note
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let rawTitle = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        title = rawTitle ?? "Untitled negotiation"
+        id = ((try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil) ?? rawTitle ?? UUID().uuidString
+        current_stage = try? c.decodeIfPresent(String.self, forKey: .current_stage)
+        next_session = try? c.decodeIfPresent(String.self, forKey: .next_session)
+        sessions_held = try? c.decodeIfPresent(Int.self, forKey: .sessions_held)
+        council_presidency = try? c.decodeIfPresent(String.self, forKey: .council_presidency)
+        ep_rapporteur = try? c.decodeIfPresent(String.self, forKey: .ep_rapporteur)
+        sticking_points = (try? c.decodeIfPresent(LossyArray<String>.self, forKey: .sticking_points))??.elements
+        last_update = normalizedDate(try? c.decodeIfPresent(String.self, forKey: .last_update))
+        oeil_url = try? c.decodeIfPresent(String.self, forKey: .oeil_url)
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
+    }
 }
 
 // MARK: - Enforcement (data/enforcement.json)
@@ -90,6 +222,13 @@ struct Negotiation: Decodable, Identifiable {
 struct EnforcementFeed: Decodable {
     let generated_at: String?
     let cases: [EnforcementCase]
+
+    enum CodingKeys: String, CodingKey { case generated_at, cases }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated_at = try? c.decodeIfPresent(String.self, forKey: .generated_at)
+        cases = (try? c.decode(LossyArray<EnforcementCase>.self, forKey: .cases))?.elements ?? []
+    }
 }
 
 struct EnforcementCase: Decodable, Identifiable {
@@ -104,6 +243,31 @@ struct EnforcementCase: Decodable, Identifiable {
     let conduct: String?
     let source_url: String?
     let final: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, date, regulation, authority, jurisdiction, entity, sector, amount_eur, conduct, source_url, final
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = ((try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil) ?? UUID().uuidString
+        date = normalizedDate(try? c.decodeIfPresent(String.self, forKey: .date))
+        regulation = try? c.decodeIfPresent(String.self, forKey: .regulation)
+        authority = try? c.decodeIfPresent(String.self, forKey: .authority)
+        jurisdiction = try? c.decodeIfPresent(String.self, forKey: .jurisdiction)
+        entity = try? c.decodeIfPresent(String.self, forKey: .entity)
+        sector = try? c.decodeIfPresent(String.self, forKey: .sector)
+        // amount may arrive as number or "1234" string
+        if let d = try? c.decodeIfPresent(Double.self, forKey: .amount_eur) {
+            amount_eur = d
+        } else if let s = (try? c.decodeIfPresent(String.self, forKey: .amount_eur)) ?? nil {
+            amount_eur = Double(s.replacingOccurrences(of: ",", with: ""))
+        } else {
+            amount_eur = nil
+        }
+        conduct = try? c.decodeIfPresent(String.self, forKey: .conduct)
+        source_url = try? c.decodeIfPresent(String.self, forKey: .source_url)
+        final = try? c.decodeIfPresent(Bool.self, forKey: .final)
+    }
 }
 
 // MARK: - Projects (local projects.json — your own work)
