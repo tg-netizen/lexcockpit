@@ -279,7 +279,25 @@ final class EditorDocument: ObservableObject, Identifiable {
 
 // MARK: - Content loading on the workspace model
 
+struct ContentCacheEntry: Codable {
+    let sha: String, title: String, date: String, status: String
+}
+
 extension WorkspaceModel {
+    private var contentCacheURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LexCockpit/content-cache-\(site.id).json")
+    }
+    private func loadContentCache() -> [String: ContentCacheEntry] {
+        (try? JSONDecoder().decode([String: ContentCacheEntry].self,
+                                   from: Data(contentsOf: contentCacheURL))) ?? [:]
+    }
+    private func saveContentCache(_ c: [String: ContentCacheEntry]) {
+        try? FileManager.default.createDirectory(
+            at: contentCacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let d = try? JSONEncoder().encode(c) { try? d.write(to: contentCacheURL) }
+    }
+
     func loadContentList() async {
         guard let repo = site.repo, !repo.isEmpty else {
             contentError = "No repo configured for this project (projects.json)."
@@ -293,33 +311,45 @@ extension WorkspaceModel {
         contentLoading = true
         contentError = nil
         var entries: [ContentEntry] = []
+        var cache = loadContentCache()
         do {
-            for dir in paths {
-                let items = try await GitHubAPI.listDir(repo: repo, path: dir)
-                    .filter { $0.type == "file" && $0.name.hasSuffix(".md") }
-                try await withThrowingTaskGroup(of: ContentEntry?.self) { group in
-                    for item in items {
-                        group.addTask {
-                            guard let text = try await GitHubAPI.file(repo: repo, path: item.path).decodedText()
-                            else { return nil }
-                            let doc = FrontmatterDoc.parse(text)
-                            let status: String
-                            if doc.scalar("draft") == "true" || doc.scalar("status") == "draft" { status = "draft" }
-                            else if doc.scalar("status") == "scheduled" { status = "scheduled" }
-                            else if let s = doc.scalar("status") { status = s }
-                            else { status = "—" }
-                            return ContentEntry(
-                                path: item.path,
-                                name: item.name,
-                                title: doc.scalar("title") ?? item.name,
-                                date: doc.scalar("date") ?? String(item.name.prefix(10)),
-                                status: status)
-                        }
+            // ONE tree request; frontmatter fetched only for new/changed files.
+            let blobs = try await GitHubAPI.tree(repo: repo).filter { item in
+                item.type == "blob" && item.path.hasSuffix(".md")
+                    && paths.contains(where: { item.path.hasPrefix($0) })
+            }
+            var fresh: [String: ContentCacheEntry] = [:]
+            try await withThrowingTaskGroup(of: (String, ContentCacheEntry)?.self) { group in
+                for blob in blobs {
+                    if let hit = cache[blob.path], hit.sha == blob.sha {
+                        fresh[blob.path] = hit
+                        continue
                     }
-                    for try await entry in group where entry != nil {
-                        entries.append(entry!)
+                    group.addTask {
+                        guard let text = try await GitHubAPI.file(repo: repo, path: blob.path).decodedText()
+                        else { return nil }
+                        let doc = FrontmatterDoc.parse(text)
+                        let status: String
+                        if doc.scalar("draft") == "true" || doc.scalar("status") == "draft" { status = "draft" }
+                        else if doc.scalar("status") == "scheduled" { status = "scheduled" }
+                        else if let s = doc.scalar("status") { status = s }
+                        else { status = "—" }
+                        return (blob.path, ContentCacheEntry(
+                            sha: blob.sha,
+                            title: doc.scalar("title") ?? (blob.path as NSString).lastPathComponent,
+                            date: doc.scalar("date") ?? String((blob.path as NSString).lastPathComponent.prefix(10)),
+                            status: status))
                     }
                 }
+                for try await result in group {
+                    if let (path, entry) = result { fresh[path] = entry }
+                }
+            }
+            cache = fresh
+            saveContentCache(cache)
+            entries = fresh.map { path, e in
+                ContentEntry(path: path, name: (path as NSString).lastPathComponent,
+                             title: e.title, date: e.date, status: e.status)
             }
             contentEntries = entries.sorted { $0.date > $1.date }
         } catch {
@@ -559,7 +589,8 @@ struct EditorView: View {
                 editorArea
                 if showQuality && !chrome.focus {
                     Divider()
-                    QualityPanel(doc: doc, coverImage: coverImage)
+                    QualityPanel(doc: doc, coverImage: coverImage,
+                                 articleURL: (model.site.url ?? "") + "/articles/" + doc.slug + ".html")
                         .frame(width: 270)
                         .transition(.move(edge: .trailing))
                 }

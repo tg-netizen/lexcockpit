@@ -177,6 +177,15 @@ enum GitHubAPI {
             from: try await request("/repos/\(repo)/contents/\(escape(path))"))
     }
 
+    struct GHTreeItem: Decodable { let path: String; let type: String; let sha: String }
+    private struct GHTree: Decodable { let tree: [GHTreeItem] }
+
+    /// One request for the whole repo file list (vs. N directory calls).
+    static func tree(repo: String) async throws -> [GHTreeItem] {
+        let data = try await request("/repos/\(repo)/git/trees/HEAD?recursive=1")
+        return try JSONDecoder().decode(GHTree.self, from: data).tree
+    }
+
     /// Create (sha == nil) or update (sha != nil) a file. Throws `.conflict`
     /// when the given SHA no longer matches the file on GitHub.
     static func put(repo: String, path: String, message: String, text: String, sha: String?) async throws -> GHPutResponse {

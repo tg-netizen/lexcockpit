@@ -12,6 +12,8 @@ final class ChromeModel: ObservableObject {
 struct QualityPanel: View {
     @ObservedObject var doc: EditorDocument
     var coverImage: NSImage?
+    var articleURL: String = ""
+    @State private var copied: String?
 
     private var words: Int {
         doc.bodyText.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
@@ -51,6 +53,12 @@ struct QualityPanel: View {
                 Group {
                     sectionLabel("Share preview")
                     ogCard
+                }
+
+                Group {
+                    sectionLabel("Share")
+                    shareButton("LinkedIn post", id: "li", text: linkedInText)
+                    shareButton("X post (\(xText.count)/280)", id: "x", text: xText)
                 }
 
                 Group {
@@ -147,6 +155,38 @@ struct QualityPanel: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cardBorder, lineWidth: 1))
+    }
+
+    private var hashtags: String {
+        tags.prefix(3).map { "#" + $0.replacingOccurrences(of: " ", with: "") }.joined(separator: " ")
+    }
+    private var linkedInText: String {
+        var t = doc.title + "\n\n" + doc.descriptionText
+        if !articleURL.isEmpty { t += "\n\n" + articleURL }
+        if !hashtags.isEmpty { t += "\n\n" + hashtags }
+        return t
+    }
+    private var xText: String {
+        var t = doc.title
+        if !doc.descriptionText.isEmpty { t += " — " + doc.descriptionText }
+        if t.count > 240 { t = String(t.prefix(237)) + "…" }
+        if !articleURL.isEmpty { t += " " + articleURL }
+        return t
+    }
+    private func shareButton(_ label: String, id: String, text: String) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { if copied == id { copied = nil } }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: copied == id ? "checkmark" : "doc.on.doc").font(.system(size: 11))
+                Text(copied == id ? "Copied!" : label).font(.caption)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(copied == id ? .statusGreen : .accentNavy)
     }
 
     private func checkRow(ok: Bool, text: String) -> some View {

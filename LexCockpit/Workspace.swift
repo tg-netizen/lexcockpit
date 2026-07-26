@@ -612,6 +612,8 @@ struct SettingsSheet: View {
     @State private var refreshMinutes = max(UserDefaults.standard.integer(forKey: "refreshMinutes"), 0)
     @State private var canvaID = ""
     @State private var canvaSecret = ""
+    @State private var plausibleKey = ""
+    @State private var mailerliteKey = ""
     @ObservedObject private var canva = CanvaAuth.shared
 
     var body: some View {
@@ -682,6 +684,18 @@ struct SettingsSheet: View {
 
             Divider()
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Analytics").font(.callout.weight(.semibold))
+                field("Plausible API key", text: $plausibleKey,
+                      hint: "plausible.io → Settings → API keys (read-only stats key)",
+                      present: Keychain.has(Keychain.plausibleKey))
+                field("MailerLite API key", text: $mailerliteKey,
+                      hint: "MailerLite → Integrations → API — also enables Weekly-brief drafts",
+                      present: Keychain.has(Keychain.mailerliteKey))
+            }
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("Feed base URL (override)").font(.callout.weight(.semibold))
                 TextField(CockpitStore.defaultBase, text: $feedBaseURL)
@@ -710,6 +724,9 @@ struct SettingsSheet: View {
                     if !netlifyPAT.isEmpty { Keychain.set(Keychain.netlifyPAT, netlifyPAT) }
                     if !buildHook.isEmpty { Keychain.set(Keychain.netlifyBuildHook, buildHook) }
                     if !githubPAT.isEmpty { Keychain.set(Keychain.githubPAT, githubPAT) }
+                    if !plausibleKey.isEmpty { Keychain.set(Keychain.plausibleKey, plausibleKey) }
+                    if !mailerliteKey.isEmpty { Keychain.set(Keychain.mailerliteKey, mailerliteKey) }
+                    plausibleKey = ""; mailerliteKey = ""
                     netlifyPAT = ""; buildHook = ""; githubPAT = ""
                     UserDefaults.standard.set(
                         feedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),

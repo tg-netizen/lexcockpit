@@ -20,6 +20,22 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           bash scripts/make-app.sh "$VERSION"
 
+      - name: Notarize (runs only when Apple secrets are configured)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_ID" ]; then
+            echo "No Apple credentials — shipping ad-hoc signed (right-click → Open)."
+            exit 0
+          fi
+          ditto -c -k --keepParent dist/LexCockpit.app /tmp/notarize.zip
+          xcrun notarytool submit /tmp/notarize.zip \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple dist/LexCockpit.app
+
       - name: Zip the app
         run: |
           cd dist

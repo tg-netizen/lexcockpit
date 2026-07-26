@@ -66,6 +66,39 @@ struct LexCockpitApp: App {
         WindowGroup(id: "localmd", for: URL.self) { $url in
             if let url = url { LocalMarkdownWindow(url: url) }
         }
+
+        // Menubar companion: deploy status + radar at a glance, app closed or not.
+        MenuBarExtra("LexCockpit", systemImage: "gauge.with.needle") {
+            MenubarView().environmentObject(store)
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+struct MenubarView: View {
+    @EnvironmentObject var store: CockpitStore
+
+    var body: some View {
+        if let site = store.sites.first {
+            let model = WorkspaceModel.shared(for: site)
+            if let latest = model.deploys.first {
+                Text("Deploy: \(latest.state.capitalized) · \(relativeTime(latest.created_at))")
+            } else {
+                Text("Deploy status not loaded")
+            }
+            Button("Check deploys now") { Task { await model.loadDeploys() } }
+            Divider()
+        }
+        let unseen = RadarStore.shared.unseenCount
+        Text(unseen > 0 ? "Radar: \(unseen) new change(s)" : "Radar: all caught up")
+        Button("Refresh feeds") { Task { await store.loadAll() } }
+        Divider()
+        Button("Open LexCockpit") {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        }
+        Button("Quit") { NSApp.terminate(nil) }
     }
 }
 
@@ -136,12 +169,14 @@ struct LocalMarkdownWindow: View {
 }
 
 enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
-    case dashboard, tracker, pipeline, trilogue, enforcement
+    case dashboard, radar, analytics, tracker, pipeline, trilogue, enforcement
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .dashboard:   return "Dashboard"
+        case .radar:       return "Radar"
+        case .analytics:   return "Analytics"
         case .tracker:     return "Tracker"
         case .pipeline:    return "Pipeline"
         case .trilogue:    return "Trilogue"
@@ -152,6 +187,8 @@ enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
     var icon: String {
         switch self {
         case .dashboard:   return "square.grid.2x2"
+        case .radar:       return "dot.radiowaves.left.and.right"
+        case .analytics:   return "chart.bar"
         case .tracker:     return "calendar"
         case .pipeline:    return "tray.full"
         case .trilogue:    return "person.3"
@@ -220,7 +257,8 @@ struct ContentView: View {
             QuickSwitcherView(store: store, navigate: { sel in selection = sel },
                               openArticle: { site, path in
                                   openWindow(id: "article", value: ArticleRef(site: site, path: path))
-                              })
+                              },
+                              actions: paletteActions)
         }
         .background(
             Button("") { showSwitcher = true }
@@ -247,6 +285,7 @@ struct ContentView: View {
         .task {
             await store.loadAll()
             await updates.check()
+            await RadarStore.shared.load(base: store.feedBase)
             restoreSession()
             // Background refresh honoring the Settings interval (0 = manual).
             while !Task.isCancelled {
@@ -269,6 +308,31 @@ struct ContentView: View {
                 columns = focused ? .detailOnly : .automatic
             }
         }
+    }
+
+    private var radarRowTitle: String {
+        let n = RadarStore.shared.unseenCount
+        return n > 0 ? "Radar (\(n))" : "Radar"
+    }
+
+    /// Command-palette actions (⌘K) beyond navigation.
+    private var paletteActions: [(String, String, () -> Void)] {
+        var out: [(String, String, () -> Void)] = [
+            ("Refresh feeds", "arrow.clockwise", { Task { await store.loadAll() } }),
+            ("Open Settings", "gearshape", { showSettings = true }),
+            ("Toggle focus mode", "arrow.up.left.and.arrow.down.right", { chrome.focus.toggle() }),
+        ]
+        if let site = store.sites.first {
+            if let urlStr = site.url, let url = URL(string: urlStr) {
+                out.append(("Open site in browser", "safari", { NSWorkspace.shared.open(url) }))
+            }
+            if let repo = site.repo, let url = URL(string: "https://github.com/\(repo)") {
+                out.append(("Open repo on GitHub", "chevron.left.forwardslash.chevron.right",
+                            { NSWorkspace.shared.open(url) }))
+            }
+            out.append(("Go to Deploys", "arrow.up.circle", { selection = .site(site.id) }))
+        }
+        return out
     }
 
     /// Restore selection / tab / article from the last session (silent —
@@ -309,6 +373,9 @@ struct ContentView: View {
                 eyebrow("Cockpit")
                 sideRow(.section(.dashboard), title: CockpitSection.dashboard.title,
                         icon: CockpitSection.dashboard.icon)
+                sideRow(.section(.radar), title: radarRowTitle, icon: CockpitSection.radar.icon)
+                sideRow(.section(.analytics), title: CockpitSection.analytics.title,
+                        icon: CockpitSection.analytics.icon)
 
                 eyebrow("Projects").padding(.top, 14)
                 if store.sites.isEmpty {
@@ -392,6 +459,8 @@ struct ContentView: View {
     @ViewBuilder private var detailView: some View {
         switch selection ?? .section(.dashboard) {
         case .section(.dashboard):   DashboardView()
+        case .section(.radar):       RadarView()
+        case .section(.analytics):   AnalyticsView()
         case .section(.tracker):     TrackerView()
         case .section(.pipeline):    PipelineView()
         case .section(.trilogue):    TrilogueView()
@@ -412,6 +481,7 @@ struct QuickSwitcherView: View {
     @ObservedObject var store: CockpitStore
     var navigate: (SidebarSelection) -> Void
     var openArticle: (SiteProject, String) -> Void
+    var actions: [(String, String, () -> Void)] = []
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var selected = 0
@@ -426,6 +496,10 @@ struct QuickSwitcherView: View {
 
     private var items: [Item] {
         var out: [Item] = []
+        for (title, icon, run) in actions {
+            out.append(Item(id: "act-" + title, title: title, subtitle: "Action",
+                            icon: icon, action: run))
+        }
         for sec in CockpitSection.allCases {
             out.append(Item(id: "sec-" + sec.rawValue, title: sec.title, subtitle: "Section",
                             icon: sec.icon, action: { navigate(.section(sec)) }))
