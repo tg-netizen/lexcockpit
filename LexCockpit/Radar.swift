@@ -62,6 +62,7 @@ final class RadarStore: ObservableObject {
                 .sorted { $0.date > $1.date }
             error = nil
             loaded = true
+            updateDockBadge()
         } catch {
             self.error = error.localizedDescription
         }
@@ -71,6 +72,11 @@ final class RadarStore: ObservableObject {
         let newest = entries.map(\.date).max() ?? todayISO()
         lastSeen = newest
         UserDefaults.standard.set(newest, forKey: "radarLastSeen")
+        updateDockBadge()
+    }
+
+    func updateDockBadge() {
+        NSApp.dockTile.badgeLabel = unseenCount > 0 ? "\(unseenCount)" : ""
     }
 }
 
@@ -223,6 +229,7 @@ struct WeeklyBriefBuilder: View {
                           ? "Create a draft campaign in MailerLite"
                           : "Add a MailerLite API key in Settings first")
                 Button("Close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(12)
             Divider()

@@ -49,12 +49,7 @@ struct FeedStateView: View {
         } else if isEmpty && store.feedLoaded.contains(kind) {
             Card { Text(emptyText).foregroundColor(.textSecondary) }
         } else if isEmpty {
-            Card {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Loading \(kind.title.lowercased()) feed…").foregroundColor(.textSecondary)
-                }
-            }
+            SkeletonStack(count: 3)
         }
     }
 }

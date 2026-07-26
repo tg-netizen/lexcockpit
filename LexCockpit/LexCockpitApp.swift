@@ -210,6 +210,7 @@ struct ContentView: View {
     @State private var selection: SidebarSelection? = .section(.dashboard)
     @State private var showSettings = false
     @State private var showSwitcher = false
+    @State private var showOnboarding = false
     @State private var columns = NavigationSplitViewVisibility.automatic
     @Environment(\.openWindow) private var openWindow
 
@@ -282,11 +283,18 @@ struct ContentView: View {
             }
             openWindow(id: "localmd", value: url)
         }
+        .onAppear {
+            if !UserDefaults.standard.bool(forKey: "onboardedV1"),
+               !Keychain.has(Keychain.githubPAT) {
+                showOnboarding = true
+            }
+        }
+        .sheet(isPresented: $showOnboarding) { SettingsSheet(onboarding: true) }
         .task {
+            restoreSession()                       // instant — local state only
             await store.loadAll()
             await updates.check()
             await RadarStore.shared.load(base: store.feedBase)
-            restoreSession()
             // Background refresh honoring the Settings interval (0 = manual).
             while !Task.isCancelled {
                 let minutes = store.refreshMinutes
@@ -555,6 +563,11 @@ struct QuickSwitcherView: View {
             .listStyle(.inset)
         }
         .frame(width: 520, height: 360)
+        .background(
+            Button("") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        )
     }
 
     private func fire(_ item: Item?) {

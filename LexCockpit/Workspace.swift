@@ -603,7 +603,11 @@ struct JSONQuickEditSheet: View {
 // MARK: - Settings sheet (all tokens, Keychain only)
 
 struct SettingsSheet: View {
+    /// First-run mode: welcome header + "Los geht's" instead of Close.
+    var onboarding = false
     @Environment(\.dismiss) private var dismiss
+    @State private var tests: [String: String] = [:]
+    @State private var testing: Set<String> = []
     @State private var netlifyPAT = ""
     @State private var buildHook = ""
     @State private var githubPAT = ""
@@ -618,9 +622,13 @@ struct SettingsSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Settings")
+            Text(onboarding ? "Welcome to LexCockpit" : "Settings")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundColor(.textPrimary)
+            if onboarding {
+                Text("One-time setup: paste the keys you have, press Save, then hit each Test button — green means the pipeline works. You can skip anything and add it later via the gear icon.")
+                    .font(.callout).foregroundColor(.textSecondary)
+            }
             Text("Tokens are stored only in the macOS Keychain — never in files, code or logs.")
                 .font(.callout).foregroundColor(.textSecondary)
 
@@ -633,6 +641,8 @@ struct SettingsSheet: View {
             field("GitHub fine-grained PAT", text: $githubPAT,
                   hint: "github.com → Settings → Developer settings → Fine-grained tokens (Contents: read/write)",
                   present: Keychain.has(Keychain.githubPAT))
+            testRow("github", "Test GitHub") { await ConnectionTest.github() }
+            testRow("netlify", "Test Netlify") { await ConnectionTest.netlify(siteId: nil) }
 
             Divider()
 
@@ -669,6 +679,7 @@ struct SettingsSheet: View {
                 field("Canva Client Secret", text: $canvaSecret,
                       hint: "Sign-in opens in your default browser — never inside the app.",
                       present: Keychain.has(Keychain.canvaClientSecret))
+                testRow("canva", "Test Canva") { await ConnectionTest.canva() }
                 if let err = canva.lastError {
                     Text(err).font(.caption2).foregroundColor(.statusRed)
                         .textSelection(.enabled)
@@ -692,6 +703,10 @@ struct SettingsSheet: View {
                 field("MailerLite API key", text: $mailerliteKey,
                       hint: "MailerLite → Integrations → API — also enables Weekly-brief drafts",
                       present: Keychain.has(Keychain.mailerliteKey))
+                testRow("plausible", "Test Plausible") {
+                    await ConnectionTest.plausible(host: "lexdigestglobal.com")
+                }
+                testRow("mailerlite", "Test MailerLite") { await ConnectionTest.mailerlite() }
             }
 
             Divider()
@@ -719,7 +734,11 @@ struct SettingsSheet: View {
             HStack {
                 if saved { Label("Saved to Keychain", systemImage: "checkmark.circle.fill").foregroundColor(.stApplied) }
                 Spacer()
-                Button("Close") { dismiss() }
+                Button(onboarding ? "Los geht's" : "Close") {
+                    if onboarding { UserDefaults.standard.set(true, forKey: "onboardedV1") }
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
                 Button("Save") {
                     if !netlifyPAT.isEmpty { Keychain.set(Keychain.netlifyPAT, netlifyPAT) }
                     if !buildHook.isEmpty { Keychain.set(Keychain.netlifyBuildHook, buildHook) }
@@ -739,6 +758,32 @@ struct SettingsSheet: View {
         }
         .padding(22)
         .frame(width: 560)
+    }
+
+    private func testRow(_ id: String, _ label: String,
+                         run: @escaping () async -> String) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                testing.insert(id)
+                Task {
+                    let verdict = await run()
+                    tests[id] = verdict
+                    testing.remove(id)
+                }
+            } label: {
+                if testing.contains(id) { ProgressView().controlSize(.mini) }
+                else { Text(label) }
+            }
+            .controlSize(.small)
+            .disabled(testing.contains(id))
+            if let verdict = tests[id] {
+                Text(verdict)
+                    .font(.caption)
+                    .foregroundColor(verdict.hasPrefix("✓") ? .statusGreen : .statusRed)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+        }
     }
 
     private func field(_ label: String, text: Binding<String>, hint: String, present: Bool) -> some View {

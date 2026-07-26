@@ -55,6 +55,7 @@ struct CanvaDesignSheet: View {
                     .keyboardShortcut(.defaultAction)
                 }
                 Button("Close") { exportTask?.cancel(); dismiss() }
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             Divider()

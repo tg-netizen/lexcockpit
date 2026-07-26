@@ -136,6 +136,7 @@ struct CanvaPickerSheet: View {
                 if loading { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(12)
             Divider()

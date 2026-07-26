@@ -52,6 +52,12 @@ final class CockpitStore: ObservableObject {
     /// distinguish "genuinely empty" from "failed or not yet loaded".
     @Published var feedLoaded: Set<FeedKind> = []
 
+    init() {
+        // Sidebar + workspaces render instantly from the local projects file;
+        // network feeds arrive after first paint.
+        loadProjectsFromBundle()
+    }
+
     // MARK: Settings (non-secret → UserDefaults; tokens live in the Keychain)
 
     static let defaultBase = "https://lexdigestglobal.com/data/"
