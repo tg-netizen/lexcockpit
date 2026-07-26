@@ -669,6 +669,14 @@ struct SettingsSheet: View {
                       present: Keychain.has(Keychain.canvaClientSecret))
                 if let err = canva.lastError {
                     Text(err).font(.caption2).foregroundColor(.statusRed)
+                        .textSelection(.enabled)
+                    if canva.invalidScope {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(CanvaAuth.scopeListForCopy, forType: .string)
+                        } label: { Label("Copy scope list", systemImage: "doc.on.doc") }
+                        .controlSize(.small)
+                    }
                 }
             }
 

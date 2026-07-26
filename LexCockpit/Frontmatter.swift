@@ -340,6 +340,13 @@ func runFrontmatterSelfTests() -> Bool {
     expect(v.count >= 43 && v.count <= 128, "PKCE verifier length in RFC bounds")
     expect(!v.contains("+") && !v.contains("/") && !v.contains("="), "PKCE verifier is base64url")
 
+    // 8b. Canva authorize URL — exactly the five enabled scopes, %3A/%20 encoded.
+    let authURL = CanvaAuth.authorizeURL(clientID: "cid", challenge: "chal", state: "st").absoluteString
+    expect(authURL.contains("scope=asset%3Aread%20asset%3Awrite%20design%3Acontent%3Aread%20design%3Acontent%3Awrite%20design%3Ameta%3Aread"),
+           "authorize URL has the five scopes, %3A/%20 encoded")
+    expect(!authURL.contains("profile") && !authURL.contains("+"),
+           "authorize URL has no extra scopes and no '+' encoding")
+
     // 8. OAuth callback request-line parsing (incl. percent-decoding + state).
     let q = OAuthLoopback.queryItems(fromRequestLine: "GET /callback?code=abc%2F123&state=xyz HTTP/1.1\r\nHost: x")
     expect(q["code"] == "abc/123" && q["state"] == "xyz", "loopback parses code + state")

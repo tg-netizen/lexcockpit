@@ -155,12 +155,43 @@ final class CanvaAuth: ObservableObject {
     @Published var needsReconnect = false
     @Published var displayName: String? = UserDefaults.standard.string(forKey: "canvaDisplayName")
     @Published var lastError: String?
+    /// Set when Canva rejected our scope list — Settings shows the exact
+    /// scopes to enable plus a copy button.
+    @Published var invalidScope = false
 
     var isConfigured: Bool { Keychain.has(Keychain.canvaClientID) && Keychain.has(Keychain.canvaClientSecret) }
     var isConnected: Bool { Keychain.has(Keychain.canvaRefreshToken) }
 
     static let redirectURI = "http://127.0.0.1:8976/callback"
-    static let scopes = "design:content:read design:content:write design:meta:read profile:read"
+    /// SINGLE source of truth — must match EXACTLY what is enabled under
+    /// developer.canva.com → LexCockpit → Scopes. Requesting anything the
+    /// integration hasn't enabled makes Canva reject with invalid_scope.
+    static let canvaScopes = ["asset:read", "asset:write",
+                              "design:content:read", "design:content:write",
+                              "design:meta:read"]
+
+    /// Strict RFC 3986 unreserved-only encoding: colons → %3A, spaces → %20
+    /// (never '+').
+    nonisolated static func strictEncode(_ s: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+    }
+
+    /// Testable authorize-URL builder (regression-tested in --selftest).
+    nonisolated static func authorizeURL(clientID: String, challenge: String, state: String) -> URL {
+        let scope = canvaScopes.map(strictEncode).joined(separator: "%20")
+        let query = [
+            "code_challenge=\(strictEncode(challenge))",
+            "code_challenge_method=S256",
+            "scope=\(scope)",
+            "response_type=code",
+            "client_id=\(strictEncode(clientID))",
+            "state=\(strictEncode(state))",
+            "redirect_uri=\(strictEncode(redirectURI))",
+        ].joined(separator: "&")
+        return URL(string: "https://www.canva.com/api/oauth/authorize?" + query)!
+    }
 
     func connect() async {
         guard let clientID = Keychain.get(Keychain.canvaClientID),
@@ -172,19 +203,16 @@ final class CanvaAuth: ObservableObject {
         lastError = nil
         defer { connecting = false }
 
+        invalidScope = false
         let verifier = PKCE.makeVerifier()
         let state = PKCE.makeVerifier()
-        var comps = URLComponents(string: "https://www.canva.com/api/oauth/authorize")!
-        comps.queryItems = [
-            .init(name: "code_challenge", value: PKCE.challenge(for: verifier)),
-            .init(name: "code_challenge_method", value: "S256"),
-            .init(name: "scope", value: Self.scopes),
-            .init(name: "response_type", value: "code"),
-            .init(name: "client_id", value: clientID),
-            .init(name: "state", value: state),
-            .init(name: "redirect_uri", value: Self.redirectURI),
-        ]
-        guard let url = comps.url else { return }
+        let url = Self.authorizeURL(clientID: clientID,
+                                    challenge: PKCE.challenge(for: verifier),
+                                    state: state)
+        #if DEBUG
+        print("[canva] authorize: " + url.absoluteString
+            .replacingOccurrences(of: Self.strictEncode(clientID), with: "‹client_id›"))
+        #endif
 
         do {
             async let callback = OAuthLoopback.waitForCallback(port: 8976, expectedState: state, timeout: 180)
@@ -198,9 +226,17 @@ final class CanvaAuth: ObservableObject {
             displayName = name
             UserDefaults.standard.set(name, forKey: "canvaDisplayName")
         } catch {
-            lastError = error.localizedDescription
+            if case CanvaError.oauth(let msg) = error, msg.contains("invalid_scope") {
+                invalidScope = true
+                lastError = "Canva rejected the requested scopes. Enable EXACTLY these under developer.canva.com → LexCockpit → Scopes, then retry:\n"
+                    + Self.canvaScopes.joined(separator: "  ·  ")
+            } else {
+                lastError = error.localizedDescription
+            }
         }
     }
+
+    static var scopeListForCopy: String { canvaScopes.joined(separator: " ") }
 
     func disconnect() {
         Keychain.delete(Keychain.canvaAccessToken)
