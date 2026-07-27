@@ -257,6 +257,22 @@ final class EditorDocument: ObservableObject, Identifiable {
         try? FileManager.default.removeItem(at: draftURL)
     }
 
+    /// Apply a FULL markdown text (from an external editor session). The
+    /// remote baseline stays untouched → dirty → normal SHA-checked save.
+    func applyFullText(_ text: String) {
+        let doc = FrontmatterDoc.parse(text)
+        title = doc.scalar("title") ?? title
+        dateStr = doc.scalar("date") ?? dateStr
+        author = doc.scalar("author") ?? author
+        descriptionText = doc.scalar("description") ?? descriptionText
+        tagsCSV = (doc.list("tags") ?? []).joined(separator: ", ")
+        if let d = doc.scalar("draft") { isDraft = d == "true" }
+        else if let s = doc.scalar("status") { isDraft = s == "draft" }
+        heroImagePath = doc.scalar("hero_image") ?? heroImagePath
+        bodyText = doc.body
+        recomputeDirty()
+    }
+
     /// Apply an autosaved draft's fields. The remote baseline stays untouched,
     /// so the document is dirty and saves through the normal SHA-checked path.
     func restoreDraft() {
@@ -565,6 +581,7 @@ struct EditorView: View {
     @EnvironmentObject var chrome: ChromeModel
     @StateObject private var wysiwyg = WysiwygController()
     @StateObject private var preview = PreviewController()
+    @StateObject private var external = ExternalEditSession()
     @State private var mode: EditorMode = .split
     @State private var confirmClose = false
     @State private var showQuality = false
@@ -583,6 +600,19 @@ struct EditorView: View {
             Divider()
             if !chrome.focus {
                 frontmatterForm
+                Divider()
+            }
+            if let name = external.activeEditorName {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath").font(.caption)
+                        .foregroundColor(.accentNavy)
+                    Text("Editing in \(name) — every save there syncs back here (external wins while active).")
+                        .font(.caption).foregroundColor(.textPrimary)
+                    Spacer()
+                    Button("Stop") { external.stop() }.controlSize(.small)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .background(Color.navyTint)
                 Divider()
             }
             HStack(spacing: 0) {
@@ -632,7 +662,7 @@ struct EditorView: View {
             Text("A locally autosaved version of this article exists (e.g. after a crash). Restore it, or discard and keep the version from GitHub?")
         }
         .confirmationDialog("Discard unsaved changes?", isPresented: $confirmClose) {
-            Button("Discard changes", role: .destructive) { model.closeEditor() }
+            Button("Discard changes", role: .destructive) { external.stop(); model.closeEditor() }
             Button("Keep editing", role: .cancel) {}
         }
         .sheet(item: $canvaSheet) { ctx in
@@ -847,12 +877,20 @@ struct EditorView: View {
         coverImage = NSImage(data: data)
     }
 
+    private func startExternal(_ editor: ExternalEditor) {
+        external.start(text: doc.serialized(), slug: doc.slug, editor: editor) { full in
+            doc.applyFullText(full)
+            wysiwyg.load(markdown: doc.bodyText)
+            preview.update(markdown: doc.bodyText)
+        }
+    }
+
     // MARK: Chrome
 
     private var header: some View {
         HStack(spacing: 10) {
             Button {
-                if doc.dirty { confirmClose = true } else { model.closeEditor() }
+                if doc.dirty { confirmClose = true } else { external.stop(); model.closeEditor() }
             } label: { Image(systemName: "chevron.left") }
             .help("Back to the article list")
 
@@ -900,6 +938,22 @@ struct EditorView: View {
             .frame(width: 34)
             .disabled(canvaBusy)
             .help("Canva graphics — presets or your recent designs")
+
+            Menu {
+                ForEach(ExternalEditor.installed()) { editor in
+                    Button(editor.name) { startExternal(editor) }
+                }
+                if external.activeEditorName != nil {
+                    Divider()
+                    Button("Stop external session") { external.stop() }
+                }
+            } label: {
+                Image(systemName: "arrow.up.forward.app")
+                    .foregroundColor(external.activeEditorName != nil ? .brandNavy : .textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 34)
+            .help("Edit in an external editor (MarkEdit, CotEditor, TextEdit) — saves sync back live")
 
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() }

@@ -35,6 +35,16 @@ struct LexCockpitApp: App {
             }
             dispatchMain()
         }
+        // `--watch-test` → headless check of the external-editor file watcher
+        // (in-place writes + atomic replaces, the way real editors save).
+        if CommandLine.arguments.contains("--watch-test") {
+            Task { @MainActor in
+                let ok = await ExternalEditSession.selfTest()
+                print(ok ? "WATCH PASS" : "WATCH FAIL")
+                exit(ok ? 0 : 1)
+            }
+            dispatchMain()
+        }
         // One-time keychain ownership adoption (kills recurring ACL prompts).
         Keychain.adoptOwnership()
         // Under `swift run` there is no app bundle — promote to a regular
