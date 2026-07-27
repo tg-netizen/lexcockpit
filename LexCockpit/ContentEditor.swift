@@ -40,6 +40,7 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var bodyText: String
     @Published var heroImagePath: String
     @Published var canvaCoverDesign: String = ""   // invisible frontmatter metadata
+    @Published var scheduledAt: String = ""        // scheduled_publish_at (yyyy-MM-dd)
     @Published var uploadingImage = false
     @Published var restoreOffer: String?     // autosaved draft found on open
     var restoreOfferDate: Date?
@@ -69,7 +70,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.fmDoc = doc
 
         var opaque = Set<String>()
-        for key in ["title", "date", "author", "description", "draft", "status", "hero_image", "canva_cover_design"] where doc.isOpaque(key) {
+        for key in ["title", "date", "author", "description", "draft", "status", "hero_image", "canva_cover_design", "scheduled_publish_at"] where doc.isOpaque(key) {
             opaque.insert(key)
         }
         if doc.entries.first(where: { $0.key == "tags" }).map({ !$0.isBindableList }) == true {
@@ -88,6 +89,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.bodyText = doc.body
         self.heroImagePath = doc.scalar("hero_image") ?? ""
         self.canvaCoverDesign = doc.scalar("canva_cover_design") ?? ""
+        self.scheduledAt = doc.scalar("scheduled_publish_at") ?? ""
         // parse canva_designs raw block: "- id: X" / "  path: Y" pairs
         if let entry = doc.entries.first(where: { $0.key == "canva_designs" }) {
             var pending: String?
@@ -165,6 +167,13 @@ final class EditorDocument: ObservableObject, Identifiable {
            !(canvaCoverDesign.isEmpty && doc.scalar("canva_cover_design") == nil) {
             doc.setScalar("canva_cover_design", canvaCoverDesign)
         }
+        if !opaqueKeys.contains("scheduled_publish_at") {
+            if scheduledAt.isEmpty {
+                if doc.scalar("scheduled_publish_at") != nil { doc.removeEntry("scheduled_publish_at") }
+            } else {
+                doc.setScalar("scheduled_publish_at", scheduledAt)
+            }
+        }
         // Draft toggle drives whichever fields the file (or template) uses.
         if !opaqueKeys.contains("draft"), doc.scalar("draft") != nil {
             doc.setScalar("draft", isDraft ? "true" : "false")
@@ -182,7 +191,18 @@ final class EditorDocument: ObservableObject, Identifiable {
         dirty = serialized() != fmDoc.serialize() || isNewFile && lastCommitSHA == nil
     }
 
-    func save(repo: String, force: Bool = false) async {
+    enum PublishState { case draft, scheduled(String), published }
+    var publishState: PublishState {
+        if !isDraft { return .published }
+        if !scheduledAt.isEmpty { return .scheduled(scheduledAt) }
+        return .draft
+    }
+
+    func publishNow()  { isDraft = false; scheduledAt = ""; recomputeDirty() }
+    func schedule(_ date: String) { isDraft = true; scheduledAt = date; recomputeDirty() }
+    func backToDraft() { isDraft = true; scheduledAt = ""; recomputeDirty() }
+
+    func save(repo: String, force: Bool = false, message customMessage: String? = nil) async {
         saving = true
         statusLine = nil
         do {
@@ -190,7 +210,8 @@ final class EditorDocument: ObservableObject, Identifiable {
             if force {
                 sha = try await GitHubAPI.file(repo: repo, path: repoPath).sha
             }
-            let message = (isNewFile && lastCommitSHA == nil) ? "content: new \(slug)" : "content: edit \(slug)"
+            let message = customMessage
+                ?? ((isNewFile && lastCommitSHA == nil) ? "content: new \(slug)" : "content: edit \(slug)")
             let text = serialized()
             let resp = try await GitHubAPI.put(repo: repo, path: repoPath,
                                                message: message, text: text, sha: sha)
@@ -225,6 +246,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             bodyText = doc.body
             heroImagePath = doc.scalar("hero_image") ?? ""
             canvaCoverDesign = doc.scalar("canva_cover_design") ?? ""
+            scheduledAt = doc.scalar("scheduled_publish_at") ?? ""
             dirty = false
             statusLine = "Reloaded the remote version."
         } catch {
@@ -269,6 +291,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         if let d = doc.scalar("draft") { isDraft = d == "true" }
         else if let s = doc.scalar("status") { isDraft = s == "draft" }
         heroImagePath = doc.scalar("hero_image") ?? heroImagePath
+        scheduledAt = doc.scalar("scheduled_publish_at") ?? scheduledAt
         bodyText = doc.body
         recomputeDirty()
     }
@@ -286,6 +309,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         isDraft = doc.scalar("draft") == "true" || doc.scalar("status") == "draft"
         heroImagePath = doc.scalar("hero_image") ?? heroImagePath
         canvaCoverDesign = doc.scalar("canva_cover_design") ?? canvaCoverDesign
+        scheduledAt = doc.scalar("scheduled_publish_at") ?? scheduledAt
         bodyText = doc.body
         restoreOffer = nil
         recomputeDirty()
@@ -588,6 +612,8 @@ struct EditorView: View {
     @State private var dropTargeted = false
     @State private var coverImage: NSImage?
     @State private var showRestore = false
+    @State private var showPublish = false
+    @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
     @State private var canvaBusy = false
     @State private var showConnectHint = false
@@ -624,10 +650,6 @@ struct EditorView: View {
                         .frame(width: 270)
                         .transition(.move(edge: .trailing))
                 }
-            }
-            if !chrome.focus {
-                Divider()
-                footer
             }
         }
         .onAppear { wireBridge() }
@@ -897,10 +919,7 @@ struct EditorView: View {
             Text(doc.fileName)
                 .font(.system(.callout, design: .monospaced))
                 .foregroundColor(.textSecondary)
-            if doc.dirty {
-                Circle().fill(Color.brandGold).frame(width: 7, height: 7)
-                    .help("Unsaved changes")
-            }
+            publishChip
             if doc.uploadingImage {
                 ProgressView().controlSize(.small)
                 Text("Uploading image…").font(.caption).foregroundColor(.textSecondary)
@@ -979,15 +998,135 @@ struct EditorView: View {
             modeButton(.split, icon: "rectangle.split.2x1", key: "2", help: "Editor + preview (⌘2)")
             modeButton(.previewOnly, icon: "doc.richtext", key: "3", help: "Preview only (⌘3)")
 
-            Button {
+            syncChip
+
+            Button("Save") {
                 Task { if let repo = model.site.repo { await doc.save(repo: repo) } }
-            } label: {
-                doc.saving ? Text("Saving…") : Text("Save  ⌘S")
             }
             .keyboardShortcut("s", modifiers: .command)
             .disabled(doc.saving || model.site.repo == nil)
+            .help("Commit the current state (keeps its Draft/Published status) — ⌘S")
+
+            Button {
+                scheduleDate = parseISO(doc.scheduledAt) ?? Date().addingTimeInterval(86400)
+                showPublish = true
+            } label: {
+                Label("Publish", systemImage: "paperplane.fill")
+                    .padding(.horizontal, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.accentNavy)
+            .disabled(doc.saving || model.site.repo == nil)
+            .popover(isPresented: $showPublish, arrowEdge: .bottom) { publishPopover }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
+    }
+
+    // MARK: Publish flow (Ghost pattern: states + schedule + checklist)
+
+    @ViewBuilder private var publishChip: some View {
+        switch doc.publishState {
+        case .published:
+            Pill(text: "Published", color: .statusGreen)
+        case .scheduled(let date):
+            Pill(text: "Scheduled · \(prettyDate(date))", color: .statusAmber)
+        case .draft:
+            Pill(text: "Draft", color: .accentNavy)
+        }
+    }
+
+    @ViewBuilder private var syncChip: some View {
+        Group {
+            if doc.saving {
+                HStack(spacing: 5) { ProgressView().controlSize(.mini); Text("Saving…") }
+            } else if doc.dirty {
+                HStack(spacing: 5) {
+                    Circle().fill(Color.brandGold).frame(width: 7, height: 7)
+                    Text("Unsaved")
+                }
+            } else if let sha = doc.lastCommitSHA {
+                Button {
+                    openDeploys()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.icloud").foregroundColor(.statusGreen)
+                        Text(String(sha.prefix(7))).font(.system(.caption, design: .monospaced))
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Committed — Netlify builds automatically. Click for deploys.")
+            } else {
+                Image(systemName: "checkmark.icloud").foregroundColor(.textSecondary)
+                    .help(doc.isNewFile ? "New file — saving commits it to \(doc.repoPath)" : "In sync with GitHub")
+            }
+        }
+        .font(.caption)
+        .foregroundColor(.textSecondary)
+        .help(doc.statusLine ?? "")
+    }
+
+    private var publishPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Publish “\(doc.title.isEmpty ? doc.slug : doc.title)”")
+                .font(.system(size: 13, weight: .semibold))
+
+            VStack(alignment: .leading, spacing: 4) {
+                checkLine(ok: !doc.heroImagePath.isEmpty, "Cover image set")
+                checkLine(ok: !doc.descriptionText.isEmpty, "Description present")
+                checkLine(ok: !doc.tagsCSV.trimmingCharacters(in: .whitespaces).isEmpty, "At least one tag")
+                checkLine(ok: !doc.bodyText.lowercased().contains("text will follow")
+                              && !doc.bodyText.lowercased().contains("todo"),
+                          "No placeholder text left")
+            }
+            Text("Warnings only — you decide.").font(.caption2).foregroundColor(.textSecondary)
+
+            Divider()
+
+            Button {
+                doc.publishNow()
+                commitPublish(message: "content: publish \(doc.slug)")
+            } label: {
+                Label("Publish now", systemImage: "paperplane.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.accentNavy)
+
+            HStack(spacing: 8) {
+                DatePicker("", selection: $scheduleDate, in: Date()..., displayedComponents: .date)
+                    .labelsHidden()
+                Button("Schedule") {
+                    let iso = isoString(scheduleDate)
+                    doc.schedule(iso)
+                    commitPublish(message: "content: schedule \(doc.slug) for \(iso)")
+                }
+            }
+            Text("Scheduled = stays a draft until the site’s daily build flips it on the chosen date.")
+                .font(.caption2).foregroundColor(.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if case .published = doc.publishState {
+                Divider()
+                Button("Back to draft") {
+                    doc.backToDraft()
+                    commitPublish(message: "content: unpublish \(doc.slug)")
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+
+    private func checkLine(ok: Bool, _ text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle")
+                .foregroundColor(ok ? .statusGreen : .statusAmber).font(.system(size: 11))
+            Text(text).font(.caption)
+        }
+    }
+
+    private func commitPublish(message: String) {
+        showPublish = false
+        Task { if let repo = model.site.repo { await doc.save(repo: repo, message: message) } }
     }
 
     private func modeButton(_ m: EditorMode, icon: String, key: KeyEquivalent, help: String) -> some View {

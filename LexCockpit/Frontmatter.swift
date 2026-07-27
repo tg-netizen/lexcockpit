@@ -180,6 +180,11 @@ struct FrontmatterDoc {
         }
     }
 
+    /// Remove an entry entirely (e.g. clearing scheduled_publish_at).
+    mutating func removeEntry(_ key: String) {
+        entries.removeAll { $0.key == key }
+    }
+
     /// Replace (or append) an entry as verbatim raw lines — used for
     /// structured metadata blocks the form never shows (e.g. canva_designs).
     mutating func setRawLines(_ key: String, _ lines: [String]) {
@@ -332,6 +337,14 @@ func runFrontmatterSelfTests() -> Bool {
     let tpl = newArticleTemplate(title: "Mein Länder-Überblick", author: "Theo Glunz")
     expect(tpl.contains("draft: true") && tpl.contains("status: draft"), "template is a draft")
     expect(tpl.contains("slug: mein-laender-ueberblick"), "template slug transliterated")
+
+    // 6b. Entry removal keeps everything else verbatim.
+    var docR = FrontmatterDoc.parse(sample)
+    docR.setScalar("scheduled_publish_at", "2026-08-01")
+    docR.removeEntry("scheduled_publish_at")
+    expect(!docR.serialize().contains("scheduled_publish_at")
+           && docR.serialize().contains("hero_image: /assets/articles/Vianna living.jpg"),
+           "removeEntry drops only the target key")
 
     // 7. PKCE S256 — RFC 7636 Appendix B reference vector.
     expect(PKCE.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")

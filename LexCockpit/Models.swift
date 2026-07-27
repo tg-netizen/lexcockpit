@@ -303,6 +303,21 @@ struct Project: Decodable, Identifiable {
 
 // MARK: - Helpers
 
+func parseISO(_ s: String) -> Date? {
+    guard s.count >= 10 else { return nil }
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd"
+    f.timeZone = TimeZone(identifier: "UTC")
+    return f.date(from: String(s.prefix(10)))
+}
+
+func isoString(_ d: Date) -> String {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd"
+    f.timeZone = TimeZone(identifier: "UTC")
+    return f.string(from: d)
+}
+
 func todayISO() -> String {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd"
