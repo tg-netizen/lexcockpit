@@ -51,12 +51,10 @@ enum RoundtripTest {
                 allIdentical = false
                 continue
             }
-            if WysiwygController.hasDesignBlocks(body) {
-                // The app switches to markdown mode BEFORE loading block
-                // articles — loading into WYSIWYG already destroys the HTML.
-                controller.setMode("markdown")
-            }
-            controller.load(markdown: body)
+            // Mirror the app: design blocks are vaulted before the canvas
+            // sees them, and restored on the way back.
+            let peeled = BlockVault.peel(body)
+            controller.load(markdown: peeled.display)
             try? await Task.sleep(nanoseconds: 1_800_000_000)
 
             let output: String? = await withCheckedContinuation { cont in
@@ -67,9 +65,10 @@ enum RoundtripTest {
                 allIdentical = false
                 continue
             }
-            // Same envelope restoration the app applies on every change.
+            // Same restore + envelope pipeline the app applies on every change.
+            let restored = BlockVault.restore(raw, vault: peeled.vault)
             let envelope = MarkdownEnvelope.split(body)
-            let got = MarkdownEnvelope.rewrap(raw, prefix: envelope.prefix, suffix: envelope.suffix)
+            let got = MarkdownEnvelope.rewrap(restored, prefix: envelope.prefix, suffix: envelope.suffix)
 
             if trimTrail(got) == trimTrail(body) {
                 print("PASS  \(file): byte-identical through WYSIWYG init")

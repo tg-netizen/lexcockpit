@@ -5,7 +5,7 @@ import AppKit
 /// The app's version: from the bundle when running as LexCockpit.app,
 /// falling back to this constant under bare `swift run`.
 enum AppVersion {
-    static let fallback = "0.7.0"
+    static let fallback = "0.14.0"
     static var current: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? fallback
     }

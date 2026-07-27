@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - Content list entry
 
@@ -43,6 +44,7 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var bodyText: String
     @Published var heroImagePath: String
     @Published var canvaCoverDesign: String = ""   // invisible frontmatter metadata
+    var blockVault: [String] = []                  // originals behind canvas block cards
     @Published var scheduledAt: String = ""        // scheduled_publish_at (yyyy-MM-dd)
     @Published var uploadingImage = false
     @Published var restoreOffer: String?     // autosaved draft found on open
@@ -456,10 +458,11 @@ extension WorkspaceModel {
         }
     }
 
-    func newArticle(title: String, inPath dir: String, author: String) {
+    func newArticle(title: String, inPath dir: String, author: String,
+                    template: ArticleTemplate = .blank) {
         let cleanDir = dir.hasSuffix("/") ? dir : dir + "/"
         let file = "\(todayISO())-\(slugify(title)).md"
-        let text = newArticleTemplate(title: title, author: author)
+        let text = newArticleTemplate(title: title, author: author, template: template)
         let doc = EditorDocument(repoPath: cleanDir + file, text: text, sha: nil, isNew: true)
         attachEditor(doc)
         doc.recomputeDirty()
@@ -662,6 +665,7 @@ struct NewArticleSheet: View {
     @State private var title = ""
     @State private var author = ""
     @State private var dir: String = ""
+    @State private var template: ArticleTemplate = .deepDive
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -670,6 +674,45 @@ struct NewArticleSheet: View {
                 .foregroundColor(.textPrimary)
             TextField("Title", text: $title).textFieldStyle(.roundedBorder)
             TextField("Author (optional)", text: $author).textFieldStyle(.roundedBorder)
+
+            Text("Start from")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.textSecondary)
+                .textCase(.uppercase)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ForEach(ArticleTemplate.allCases) { t in
+                    Button {
+                        template = t
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 7) {
+                                Image(systemName: t.icon)
+                                    .foregroundColor(template == t ? .accentNavy : .textSecondary)
+                                Text(t.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.textPrimary)
+                                Spacer()
+                                if template == t {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.accentNavy).font(.caption)
+                                }
+                            }
+                            Text(t.desc)
+                                .font(.caption).foregroundColor(.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .multilineTextAlignment(.leading)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 9)
+                            .fill(template == t ? Color.navyTint : Color.bgPage))
+                        .overlay(RoundedRectangle(cornerRadius: 9)
+                            .stroke(template == t ? Color.accentNavy : Color.cardBorder))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             if (model.site.content_paths ?? []).count > 1 {
                 Picker("Folder", selection: $dir) {
                     ForEach(model.site.content_paths ?? [], id: \.self) { Text($0).tag($0) }
@@ -684,7 +727,7 @@ struct NewArticleSheet: View {
                 Button("Cancel") { dismiss() }
                 Button("Create draft") {
                     let folder = dir.isEmpty ? (model.site.content_paths?.first ?? "content/articles/") : dir
-                    model.newArticle(title: title, inPath: folder, author: author)
+                    model.newArticle(title: title, inPath: folder, author: author, template: template)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -692,7 +735,7 @@ struct NewArticleSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 500)
         .onAppear { dir = model.site.content_paths?.first ?? "" }
     }
 }
@@ -718,7 +761,9 @@ struct EditorView: View {
     @State private var showRestore = false
     @AppStorage("typewriterEnabled") private var typewriterOn = true
     @State private var showHistory = false
-    @State private var blockProtection = false
+    @State private var blockEdit: BlockEditContext?
+    @State private var showMedia = false
+    @State private var showSource = false
     @State private var showPublish = false
     @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
@@ -735,20 +780,6 @@ struct EditorView: View {
                 frontmatterForm
                 Divider()
             }
-            if blockProtection {
-                HStack(spacing: 8) {
-                    Image(systemName: "shield.lefthalf.filled").font(.caption)
-                        .foregroundColor(.accentNavy)
-                    Text("Design blocks detected — opened in Markdown mode to protect them. The preview on the right shows the rendered result; switching to WYSIWYG would strip the block markup.")
-                        .font(.caption).foregroundColor(.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                    Button("Got it") { blockProtection = false }.controlSize(.small)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 6)
-                .background(Color.navyTint)
-                Divider()
-            }
             if let name = external.activeEditorName {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath").font(.caption)
@@ -762,6 +793,14 @@ struct EditorView: View {
                 .background(Color.navyTint)
                 Divider()
             }
+            if !chrome.focus && mode != .previewOnly {
+                CoverCardView(doc: doc, coverImage: coverImage, busy: canvaBusy,
+                              onChoose: { pickImage { url in Task { await coverFromFile(url) } } },
+                              onCanva: { openCanva(asCover: true) },
+                              onRemove: { doc.heroImagePath = ""; doc.recomputeDirty() },
+                              onDrop: { providers in handleDrop(providers, asCover: true) })
+                Divider()
+            }
             HStack(spacing: 0) {
                 editorArea
                 if showQuality && !chrome.focus {
@@ -769,6 +808,17 @@ struct EditorView: View {
                     QualityPanel(doc: doc, coverImage: coverImage,
                                  articleURL: (model.site.url ?? "") + "/articles/" + doc.slug + ".html")
                         .frame(width: 270)
+                        .transition(.move(edge: .trailing))
+                }
+                if showMedia && !chrome.focus {
+                    Divider()
+                    MediaPanel(model: model, doc: doc,
+                               onInsert: { path, stem in
+                                   wysiwyg.insert(markdown: "![\(stem)](\(path))")
+                               },
+                               onCover: { path in doc.heroImagePath = path; doc.recomputeDirty() },
+                               onUpload: { pickImage { url in Task { await mediaFromFile(url) } } })
+                        .frame(width: 232)
                         .transition(.move(edge: .trailing))
                 }
             }
@@ -787,7 +837,7 @@ struct EditorView: View {
                 Task {
                     if let repo = model.site.repo {
                         await doc.reloadRemote(repo: repo)
-                        wysiwyg.load(markdown: doc.bodyText)
+                        reloadEditorFromBody()
                     }
                 }
             }
@@ -801,7 +851,7 @@ struct EditorView: View {
         .alert(restoreTitle, isPresented: $showRestore) {
             Button("Restore draft") {
                 doc.restoreDraft()
-                wysiwyg.load(markdown: doc.bodyText)
+                reloadEditorFromBody()
             }
             Button("Discard draft", role: .destructive) {
                 doc.restoreOffer = nil
@@ -845,14 +895,27 @@ struct EditorView: View {
         .sheet(isPresented: $showHistory) {
             SnapshotHistorySheet(slug: doc.slug) { text in
                 doc.applyFullText(text)
-                wysiwyg.load(markdown: doc.bodyText)
-                preview.update(markdown: doc.bodyText)
+                reloadEditorFromBody()
                 doc.statusLine = "Snapshot restored — review and save."
             }
         }
         .sheet(isPresented: $showCanvaPicker) {
             CanvaPickerSheet { item in
                 Task { await importExistingDesign(item) }
+            }
+        }
+        .sheet(item: $blockEdit) { ctx in
+            BlockEditSheet(context: ctx) { newHTML in
+                doc.bodyText = BlockVault.replace(ctx.index, in: doc.bodyText,
+                                                  vault: doc.blockVault, with: newHTML)
+                doc.recomputeDirty()
+                reloadEditorFromBody(reveal: ctx.index)
+            }
+        }
+        .sheet(isPresented: $showSource) {
+            SourceSheet(initial: doc.serialized()) { full in
+                doc.applyFullText(full)
+                reloadEditorFromBody()
             }
         }
         .alert("Connect Canva first", isPresented: $showConnectHint) {
@@ -936,11 +999,14 @@ struct EditorView: View {
     // MARK: Bridge wiring (bodyText stays the single source the save path uses)
 
     private func wireBridge() {
-        // Preserve the body's blank-line envelope so an unedited document
-        // stays byte-identical through the WYSIWYG surface.
+        // Blank-line envelope + block vault keep every byte the editor
+        // cannot faithfully represent out of its hands.
         let envelope = MarkdownEnvelope.split(doc.bodyText)
+        let peeled = BlockVault.peel(doc.bodyText)
+        doc.blockVault = peeled.vault
         wysiwyg.onChange = { md in
-            let wrapped = MarkdownEnvelope.rewrap(md, prefix: envelope.prefix, suffix: envelope.suffix)
+            let restored = BlockVault.restore(md, vault: doc.blockVault)
+            let wrapped = MarkdownEnvelope.rewrap(restored, prefix: envelope.prefix, suffix: envelope.suffix)
             doc.bodyText = wrapped
             doc.recomputeDirty()
             preview.update(markdown: wrapped)
@@ -953,15 +1019,116 @@ struct EditorView: View {
                 pendingCanvaEdit = match.id
             }
         }
-        if WysiwygController.hasDesignBlocks(doc.bodyText) {
-            wysiwyg.setMode("markdown", lock: true)
-            blockProtection = true
+        wysiwyg.onBlockEdit = { i in
+            guard i < doc.blockVault.count else { return }
+            blockEdit = BlockEditContext(index: i, original: doc.blockVault[i])
         }
-        wysiwyg.load(markdown: doc.bodyText)
+        wysiwyg.onBlockDelete = { i in
+            guard i < doc.blockVault.count else { return }
+            doc.bodyText = BlockVault.replace(i, in: doc.bodyText, vault: doc.blockVault, with: "")
+            doc.recomputeDirty()
+            reloadEditorFromBody()
+        }
+        wysiwyg.onBlockInsert = { kind, text in
+            if kind == "pullquote", let t = text {
+                substituteMarker(with: "<div class=\"pull-quote\">\(t)</div>")
+            } else if let k = BlockKind(rawValue: kind) {
+                substituteMarker(with: k.markdown)
+            } else {
+                substituteMarker(with: "")
+            }
+        }
+        wysiwyg.onImagePick = { figurePickFlow() }
+        wysiwyg.load(markdown: peeled.display)
         wysiwyg.installBlocks(json: BlockKind.jsPayload)
         preview.renderNow(doc.bodyText)
         SessionHub.shared.state.articlePath = doc.repoPath
         if let raw = SessionHub.shared.state.editorMode, let m = EditorMode(rawValue: raw) { mode = m }
+    }
+
+    /// Re-peel the body into the canvas (after block edit/delete/insert,
+    /// snapshot restore, conflict reload or external-editor sync).
+    private func reloadEditorFromBody(reveal: Int? = nil) {
+        let peeled = BlockVault.peel(doc.bodyText)
+        doc.blockVault = peeled.vault
+        wysiwyg.load(markdown: peeled.display)
+        preview.update(markdown: doc.bodyText)
+        if let i = reveal { wysiwyg.revealVault(i) }
+    }
+
+    /// Raw HTML inserted through the editor API gets backslash-escaped, so
+    /// insertion works by marker: the canvas placed a plain-text marker at
+    /// the caret; here the current markdown is pulled, vaulted originals are
+    /// restored, the marker is swapped for the real block, and the canvas is
+    /// re-peeled so the new block appears as a rendered card.
+    private func substituteMarker(with block: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            wysiwyg.currentMarkdown { md in
+                guard let md = md else { return }
+                let envelope = MarkdownEnvelope.split(doc.bodyText)
+                let restored = BlockVault.restore(md, vault: doc.blockVault)
+                let substituted = BlockVault.substituteMarker(in: restored, with: block)
+                doc.bodyText = MarkdownEnvelope.rewrap(substituted, prefix: envelope.prefix, suffix: envelope.suffix)
+                doc.recomputeDirty()
+                reloadEditorFromBody()
+            }
+        }
+    }
+
+    /// Figure block: marker is already placed — pick an image, upload it,
+    /// then swap the marker for a real figure (or remove it on cancel).
+    private func figurePickFlow() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.begin { resp in
+            guard resp == .OK, let url = panel.url else {
+                substituteMarker(with: "")
+                return
+            }
+            Task { await insertFigure(from: url) }
+        }
+    }
+
+    private func pickImage(_ done: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.begin { resp in
+            if resp == .OK, let url = panel.url { done(url) }
+        }
+    }
+
+    private func insertFigure(from url: URL) async {
+        guard let repo = model.site.repo, let data = try? Data(contentsOf: url) else {
+            substituteMarker(with: "")
+            return
+        }
+        doc.uploadingImage = true
+        defer { doc.uploadingImage = false }
+        guard let prepared = ImagePipeline.prepare(data: data, suggestedName: url.lastPathComponent) else {
+            doc.statusLine = "Could not read that image."
+            substituteMarker(with: "")
+            return
+        }
+        do {
+            let path = try await ImagePipeline.upload(repo: repo, slug: doc.slug, prepared: prepared)
+            substituteMarker(with: "<figure>\n<img src=\"\(path)\" alt=\"\">\n<figcaption>Caption.</figcaption>\n</figure>")
+            doc.statusLine = "Image committed: \(path)"
+        } catch {
+            substituteMarker(with: "")
+            doc.statusLine = "Image upload failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func coverFromFile(_ url: URL) async {
+        guard let data = try? Data(contentsOf: url) else { return }
+        await uploadDropped(data: data, name: url.lastPathComponent, asCover: true)
+    }
+
+    private func mediaFromFile(_ url: URL) async {
+        guard let data = try? Data(contentsOf: url) else { return }
+        await uploadDropped(data: data, name: url.lastPathComponent, asCover: false)
     }
 
     // MARK: Image pipeline
@@ -1044,8 +1211,7 @@ struct EditorView: View {
     private func startExternal(_ editor: ExternalEditor) {
         external.start(text: doc.serialized(), slug: doc.slug, editor: editor) { full in
             doc.applyFullText(full)
-            wysiwyg.load(markdown: doc.bodyText)
-            preview.update(markdown: doc.bodyText)
+            reloadEditorFromBody()
         }
     }
 
@@ -1088,7 +1254,12 @@ struct EditorView: View {
             Menu {
                 ForEach(BlockKind.allCases) { block in
                     Button {
-                        wysiwyg.insert(markdown: block.markdown)
+                        wysiwyg.placeInsertionMarker()
+                        if block.action == "imagepick" {
+                            figurePickFlow()
+                        } else {
+                            substituteMarker(with: block.markdown)
+                        }
                     } label: { Label(block.title, systemImage: block.icon) }
                 }
             } label: {
@@ -1152,6 +1323,24 @@ struct EditorView: View {
             .buttonStyle(.plain)
             .keyboardShortcut("i", modifiers: .command)
             .help("Writing-quality panel (⌘I)")
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { showMedia.toggle() }
+            } label: {
+                Image(systemName: "photo.stack")
+                    .foregroundColor(showMedia ? .brandNavy : .textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Media panel — this article's images")
+
+            Button {
+                showSource = true
+            } label: {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .foregroundColor(.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("View source — the raw markdown, for fine control")
 
             modeButton(.editorOnly, icon: "square.and.pencil", key: "1", help: "Editor only (⌘1)")
             modeButton(.split, icon: "rectangle.split.2x1", key: "2", help: "Editor + preview (⌘2)")
@@ -1488,5 +1677,391 @@ struct EditorView: View {
             Spacer()
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
+    }
+}
+
+
+// MARK: - Cover card (Canva-style visual cover above the canvas)
+
+struct CoverCardView: View {
+    @ObservedObject var doc: EditorDocument
+    var coverImage: NSImage?
+    var busy: Bool
+    var onChoose: () -> Void
+    var onCanva: () -> Void
+    var onRemove: () -> Void
+    var onDrop: ([NSItemProvider]) -> Bool
+
+    @State private var hovering = false
+    @State private var targeted = false
+
+    var body: some View {
+        ZStack {
+            if let img = coverImage {
+                GeometryReader { geo in
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: 118)
+                        .clipped()
+                }
+                LinearGradient(colors: [.clear, .black.opacity(0.55)],
+                               startPoint: .center, endPoint: .bottom)
+                overlayControls(light: true)
+            } else if !doc.heroImagePath.isEmpty {
+                Rectangle().fill(Color.navyTint)
+                VStack(spacing: 6) {
+                    Image(systemName: "photo").font(.title3).foregroundColor(.accentNavy)
+                    Text(doc.heroImagePath)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.textSecondary).lineLimit(1)
+                }
+                overlayControls(light: false)
+            } else {
+                Rectangle().fill(Color.bgPage)
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                    .foregroundColor(targeted ? .accentNavy : .cardBorder)
+                    .padding(10)
+                HStack(spacing: 14) {
+                    Label("Add a cover", systemImage: "photo.badge.plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.textSecondary)
+                    Button("Choose image…", action: onChoose).controlSize(.small)
+                    Button {
+                        onCanva()
+                    } label: {
+                        Label(doc.canvaCoverDesign.isEmpty ? "Design in Canva" : "Edit Canva design",
+                              systemImage: "paintbrush")
+                    }
+                    .controlSize(.small).disabled(busy)
+                    Text("or drop an image here")
+                        .font(.caption).foregroundColor(.textSecondary)
+                }
+            }
+        }
+        .frame(height: 118)
+        .clipped()
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onDrop(of: ["public.file-url", "public.image"], isTargeted: $targeted) { onDrop($0) }
+        .animation(.easeInOut(duration: 0.15), value: hovering)
+    }
+
+    @ViewBuilder private func overlayControls(light: Bool) -> some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 8) {
+                Text(doc.heroImagePath)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(light ? .white.opacity(0.85) : .textSecondary)
+                    .lineLimit(1)
+                Spacer()
+                if hovering {
+                    Button("Replace…", action: onChoose).controlSize(.small)
+                    Button {
+                        onCanva()
+                    } label: {
+                        Label(doc.canvaCoverDesign.isEmpty ? "Canva" : "Edit in Canva",
+                              systemImage: "paintbrush")
+                    }
+                    .controlSize(.small).disabled(busy)
+                    Button("Remove", role: .destructive, action: onRemove).controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12).padding(.bottom, 8)
+        }
+    }
+}
+
+// MARK: - Media panel (this article's images)
+
+struct MediaPanel: View {
+    @ObservedObject var model: WorkspaceModel
+    @ObservedObject var doc: EditorDocument
+    var onInsert: (String, String) -> Void
+    var onCover: (String) -> Void
+    var onUpload: () -> Void
+
+    @State private var items: [GHContentItem] = []
+    @State private var loading = true
+    @State private var note: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Media")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.textSecondary)
+                Spacer()
+                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).foregroundColor(.textSecondary)
+                    .help("Refresh")
+                Button(action: onUpload) { Image(systemName: "plus") }
+                    .buttonStyle(.plain).foregroundColor(.accentNavy)
+                    .help("Upload an image to this article")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            Divider()
+            if loading {
+                Spacer(); HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }; Spacer()
+            } else if items.isEmpty {
+                Spacer()
+                VStack(spacing: 6) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.title3).foregroundColor(.textSecondary)
+                    Text(note ?? "No images for this article yet.\nPaste, drop or upload one.")
+                        .font(.caption).foregroundColor(.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 10)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(items) { item in
+                            mediaCell(item)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+        }
+        .background(Color.bgCard)
+        .task(id: doc.slug) { await load() }
+    }
+
+    @ViewBuilder private func mediaCell(_ item: GHContentItem) -> some View {
+        let webPath = "/" + item.path
+        VStack(alignment: .leading, spacing: 5) {
+            ZStack {
+                Rectangle().fill(Color.navyTint)
+                if let base = model.site.url, let url = URL(string: base + webPath) {
+                    AsyncImage(url: url) { phase in
+                        if case .success(let img) = phase {
+                            img.resizable().aspectRatio(contentMode: .fill)
+                        } else {
+                            Image(systemName: "photo").foregroundColor(.textSecondary)
+                        }
+                    }
+                }
+            }
+            .frame(height: 92).clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            Text(item.name)
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundColor(.textSecondary).lineLimit(1)
+            HStack(spacing: 6) {
+                Button("Insert") {
+                    let stem = item.name.components(separatedBy: ".").first ?? "image"
+                    onInsert(webPath, stem)
+                }
+                .controlSize(.small)
+                Button("Set as cover") { onCover(webPath) }
+                    .controlSize(.small)
+                    .disabled(doc.heroImagePath == webPath)
+            }
+        }
+        .padding(7)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.bgPage))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.cardBorder))
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        note = nil
+        guard let repo = model.site.repo else { items = []; return }
+        do {
+            items = try await GitHubAPI.listDir(repo: repo, path: "assets/images/articles/\(doc.slug)")
+                .filter { $0.type == "file" }
+        } catch {
+            items = []
+            if case APIError.http(404, _) = error {
+                note = "No images for this article yet.\nPaste, drop or upload one."
+            } else {
+                note = error.localizedDescription
+            }
+        }
+    }
+}
+
+// MARK: - Block editor (Canva-style: edit content fields, never markup)
+
+struct BlockEditContext: Identifiable {
+    let id = UUID()
+    let index: Int
+    let original: String
+}
+
+struct BlockEditSheet: View {
+    let context: BlockEditContext
+    var onSave: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private enum Kind { case pullquote, callout, keyfacts, figure, other }
+    @State private var kind: Kind = .other
+    @State private var text = ""            // pullquote / callout paragraphs / raw fallback
+    @State private var warn = false         // callout flavor
+    @State private var title = ""           // keyfacts title
+    @State private var itemsText = ""       // keyfacts items, one per line
+    @State private var src = ""             // figure
+    @State private var alt = ""
+    @State private var caption = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(BlockVault.kindLabel(of: context.original))
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.textPrimary)
+            switch kind {
+            case .pullquote:
+                Text("The lifted sentence:").font(.caption).foregroundColor(.textSecondary)
+                TextEditor(text: $text)
+                    .font(.system(size: 14))
+                    .frame(height: 84)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
+            case .callout:
+                Picker("Style", selection: $warn) {
+                    Text("Info (blue)").tag(false)
+                    Text("Warning (amber)").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text("Text (blank line = new paragraph):").font(.caption).foregroundColor(.textSecondary)
+                TextEditor(text: $text)
+                    .font(.system(size: 14))
+                    .frame(height: 110)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
+            case .keyfacts:
+                TextField("Box title", text: $title).textFieldStyle(.roundedBorder)
+                Text("One fact per line:").font(.caption).foregroundColor(.textSecondary)
+                TextEditor(text: $itemsText)
+                    .font(.system(size: 13))
+                    .frame(height: 130)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
+            case .figure:
+                LabeledContent("Image") {
+                    Text(src.isEmpty ? "—" : src)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.textSecondary).lineLimit(1)
+                }
+                TextField("Caption", text: $caption).textFieldStyle(.roundedBorder)
+                TextField("Alt text (accessibility)", text: $alt).textFieldStyle(.roundedBorder)
+            case .other:
+                Text("Raw block HTML:").font(.caption).foregroundColor(.textSecondary)
+                TextEditor(text: $text)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 150)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save block") { onSave(rebuild()); dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 470)
+        .onAppear { parse() }
+    }
+
+    private func parse() {
+        let html = context.original
+        let inner = Self.innerHTML(of: html)
+        if html.contains("class=\"pull-quote\"") {
+            kind = .pullquote
+            text = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if html.contains("class=\"callout") {
+            kind = .callout
+            warn = html.contains("callout--warn")
+            let paras = Self.matches("<p>([\\s\\S]*?)</p>", inner)
+            text = paras.isEmpty ? inner.trimmingCharacters(in: .whitespacesAndNewlines)
+                                 : paras.joined(separator: "\n\n")
+        } else if html.contains("class=\"keyfacts\"") {
+            kind = .keyfacts
+            title = Self.matches("<strong>([\\s\\S]*?)</strong>", inner).first ?? "Key facts"
+            itemsText = Self.matches("<li>([\\s\\S]*?)</li>", inner).joined(separator: "\n")
+        } else if html.hasPrefix("<figure") {
+            kind = .figure
+            src = Self.matches("src=\"([^\"]*)\"", html).first ?? ""
+            alt = Self.matches("alt=\"([^\"]*)\"", html).first ?? ""
+            caption = Self.matches("<figcaption>([\\s\\S]*?)</figcaption>", html).first ?? ""
+        } else {
+            kind = .other
+            text = html
+        }
+    }
+
+    private func rebuild() -> String {
+        switch kind {
+        case .pullquote:
+            return "<div class=\"pull-quote\">\(text.trimmingCharacters(in: .whitespacesAndNewlines))</div>"
+        case .callout:
+            let cls = warn ? "callout callout--warn" : "callout callout--info"
+            let paras = text.components(separatedBy: "\n\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .map { "<p>\($0.replacingOccurrences(of: "\n", with: " "))</p>" }
+            return "<div class=\"\(cls)\">\n\(paras.joined(separator: "\n"))\n</div>"
+        case .keyfacts:
+            let lis = itemsText.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .map { "<li>\($0)</li>" }
+            return "<div class=\"keyfacts\">\n<p><strong>\(title)</strong></p>\n<ul>\n\(lis.joined(separator: "\n"))\n</ul>\n</div>"
+        case .figure:
+            return "<figure>\n<img src=\"\(src)\" alt=\"\(alt)\">\n<figcaption>\(caption)</figcaption>\n</figure>"
+        case .other:
+            return text
+        }
+    }
+
+    private static func innerHTML(of block: String) -> String {
+        guard let gt = block.firstIndex(of: ">") else { return block }
+        let tag = block.hasPrefix("<figure") ? "figure" : "div"
+        guard let close = block.range(of: "</\(tag)>", options: .backwards) else { return block }
+        return String(block[block.index(after: gt)..<close.lowerBound])
+    }
+
+    private static func matches(_ pattern: String, _ text: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap {
+            $0.numberOfRanges > 1 ? ns.substring(with: $0.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        }
+    }
+}
+
+// MARK: - Source view (raw markdown, the whole file)
+
+struct SourceSheet: View {
+    let initial: String
+    var onApply: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Source — full markdown incl. frontmatter")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.textPrimary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Apply") { onApply(text); dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(text == initial)
+            }
+            .padding(12)
+            Divider()
+            TextEditor(text: $text)
+                .font(.system(size: 12.5, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .background(Color.bgPage)
+        }
+        .frame(width: 720, height: 560)
+        .onAppear { text = initial }
     }
 }

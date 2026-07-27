@@ -258,10 +258,132 @@ func slugify(_ title: String) -> String {
 
 /// Frontmatter template for a brand-new article (draft by default; `status`
 /// matches what the site's build scripts read, `draft` what the app toggles).
-func newArticleTemplate(title: String, author: String) -> String {
+/// Article templates for the new-article gallery (Canva-style start):
+/// each gives a pre-structured body so nobody faces an empty page.
+enum ArticleTemplate: String, CaseIterable, Identifiable {
+    case blank, deepDive, newsBrief, trackerUpdate
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .blank:         return "Blank"
+        case .deepDive:      return "Deep dive"
+        case .newsBrief:     return "News brief"
+        case .trackerUpdate: return "Tracker update"
+        }
+    }
+
+    var desc: String {
+        switch self {
+        case .blank:         return "Empty page, no structure"
+        case .deepDive:      return "Long-form: hook, history, key facts, analysis"
+        case .newsBrief:     return "Short: what happened, why it matters, what's next"
+        case .trackerUpdate: return "Regulation change: what moved, old → new, deadlines"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .blank:         return "doc"
+        case .deepDive:      return "text.book.closed"
+        case .newsBrief:     return "bolt"
+        case .trackerUpdate: return "antenna.radiowaves.left.and.right"
+        }
+    }
+
+    var typeValue: String? {
+        switch self {
+        case .blank: return nil
+        case .deepDive: return "deep-dive"
+        case .newsBrief: return "brief"
+        case .trackerUpdate: return "tracker-update"
+        }
+    }
+
+    var body: String {
+        switch self {
+        case .blank:
+            return ""
+        case .deepDive:
+            return """
+            Open with the scene — a concrete place, person or moment that makes the reader feel the question.
+
+            ## The backstory
+
+            How did we get here? Two or three paragraphs of history the reader needs.
+
+            <div class="pull-quote">One sentence worth lifting out.</div>
+
+            ## What the rules actually say
+
+            The substance — precise, sourced, readable.
+
+            <div class="keyfacts">
+            <p><strong>Key facts</strong></p>
+            <ul>
+            <li>Fact one</li>
+            <li>Fact two</li>
+            <li>Fact three</li>
+            </ul>
+            </div>
+
+            ## What it means
+
+            Your analysis — the "so what" for the reader.
+
+            ---
+
+            ## The takeaway
+
+            Close the loop with the opening scene.
+            """
+        case .newsBrief:
+            return """
+            **What happened:** one paragraph, just the facts.
+
+            **Why it matters:** one paragraph — who is affected and how.
+
+            <div class="callout callout--info">
+            <p>Good to know: one piece of context most coverage misses.</p>
+            </div>
+
+            **What's next:** dates, deadlines, the thing to watch.
+            """
+        case .trackerUpdate:
+            return """
+            ## What moved
+
+            Which regulation changed, and when.
+
+            <div class="callout callout--warn">
+            <p>Watch out: the change that affects readers directly.</p>
+            </div>
+
+            ## Old → new
+
+            What the text said before, what it says now.
+
+            <div class="keyfacts">
+            <p><strong>Deadlines</strong></p>
+            <ul>
+            <li>Date — obligation</li>
+            </ul>
+            </div>
+
+            ## Our read
+
+            What this means in practice.
+            """
+        }
+    }
+}
+
+func newArticleTemplate(title: String, author: String,
+                        template: ArticleTemplate = .blank) -> String {
     let slug = slugify(title)
     var out = "---\n"
     out += "title: \(FrontmatterDoc.quoteIfNeeded(title))\n"
+    if let type = template.typeValue { out += "type: \(type)\n" }
     out += "date: \(todayISO())\n"
     if !author.isEmpty { out += "author: \(FrontmatterDoc.quoteIfNeeded(author))\n" }
     out += "slug: \(slug)\n"
@@ -270,6 +392,8 @@ func newArticleTemplate(title: String, author: String) -> String {
     out += "draft: true\n"
     out += "status: draft\n"
     out += "---\n\n"
+    let body = template.body
+    if !body.isEmpty { out += body + "\n" }
     return out
 }
 
@@ -364,8 +488,8 @@ func runFrontmatterSelfTests() -> Bool {
     let q = OAuthLoopback.queryItems(fromRequestLine: "GET /callback?code=abc%2F123&state=xyz HTTP/1.1\r\nHost: x")
     expect(q["code"] == "abc/123" && q["state"] == "xyz", "loopback parses code + state")
 
-    // 9. Design-block detection (drives the markdown-mode protection: Toast's
-    //    WYSIWYG strips raw HTML containers, so these must never load into it).
+    // 9. Design-block detection (feeds the vault: Toast's WYSIWYG cannot
+    //    round-trip raw HTML containers, so they are vaulted before loading).
     expect(WysiwygController.hasDesignBlocks("x\n<div class=\"pull-quote\">q</div>"),
            "detects pull-quote block")
     expect(WysiwygController.hasDesignBlocks("<div class=\"callout callout--info\">i</div>"),
@@ -375,6 +499,69 @@ func runFrontmatterSelfTests() -> Bool {
            "detects keyfacts + figure blocks")
     expect(!WysiwygController.hasDesignBlocks("Plain **markdown** with > quote\n\n---\n\n## h2"),
            "plain markdown is not flagged as blocks")
+
+    // 10. Block vault — the data-safety engine behind the one-canvas editor.
+    let vaultBody = """
+    Intro paragraph.
+
+    <div class="pull-quote">Single line quote.</div>
+
+    ## Heading
+
+    <div class="callout callout--info">
+    <p>Multi
+    line inner.</p>
+    </div>
+
+    > "Quoted text."
+    >
+    > — Attribution
+
+    <figure>
+    <img src="/assets/x.png" alt="">
+    <figcaption>Cap.</figcaption>
+    </figure>
+
+    End.
+    """
+    let peeled = BlockVault.peel(vaultBody)
+    expect(peeled.vault.count == 3, "vault captures all three raw blocks")
+    expect(!peeled.display.contains("\n<p>Multi"),
+           "placeholders are single-line")
+    expect(peeled.display.contains("<div data-vault=\"0\" class=\"pull-quote\">"),
+           "placeholder puts data-vault first (Toast's canonical order)")
+    expect(BlockVault.restore(peeled.display, vault: peeled.vault) == vaultBody,
+           "peel → restore is byte-identical")
+    expect(BlockVault.restore(peeled.display.replacingOccurrences(of: "\n>\n", with: "\n> \n"),
+                              vault: peeled.vault) == vaultBody,
+           "restore undoes Toast's empty-quote-line padding")
+    let removed = BlockVault.replace(1, in: vaultBody, vault: peeled.vault, with: "")
+    expect(!removed.contains("callout") && removed.contains("pull-quote") && removed.contains("<figure>"),
+           "replace(index, with: empty) deletes exactly that block")
+    let edited = BlockVault.replace(0, in: vaultBody, vault: peeled.vault,
+                                    with: "<div class=\"pull-quote\">New quote.</div>")
+    expect(edited.contains("New quote.") && !edited.contains("Single line quote."),
+           "replace(index) swaps exactly that block")
+
+    // 10b. Marker substitution (the canvas insertion path).
+    let markerBody = "Para one.\n\n\(BlockVault.insertionMarker)\n\nPara two."
+    let landed = BlockVault.substituteMarker(in: markerBody, with: BlockKind.pullquote.markdown)
+    expect(landed == "Para one.\n\n<div class=\"pull-quote\">Your pull quote here.</div>\n\nPara two.",
+           "marker swaps for the block with clean spacing")
+    expect(BlockVault.substituteMarker(in: markerBody, with: "") == "Para one.\n\nPara two.",
+           "empty substitution (cancel) removes the marker cleanly")
+    expect(BlockVault.substituteMarker(in: "No marker here.", with: "<hr>").hasSuffix("<hr>\n"),
+           "vanished marker appends the block instead of dropping it")
+
+    // 11. Article templates ship structured bodies with design blocks.
+    let deep = newArticleTemplate(title: "Test Piece", author: "", template: .deepDive)
+    expect(deep.contains("type: deep-dive") && deep.contains("class=\"keyfacts\"")
+           && deep.contains("## The takeaway"), "deep-dive template structured")
+    let brief = newArticleTemplate(title: "Test Piece", author: "", template: .newsBrief)
+    expect(brief.contains("**What happened:**") && brief.contains("callout--info"),
+           "news-brief template structured")
+    expect(newArticleTemplate(title: "Test Piece", author: "") == newArticleTemplate(title: "Test Piece", author: "", template: .blank),
+           "blank template unchanged (backwards compatible)")
 
     return ok
 }

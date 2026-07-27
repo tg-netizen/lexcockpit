@@ -45,6 +45,10 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     var onImage: ((_ id: String, _ name: String, _ data: Data) -> Void)?
     /// Right-click on an image inside the editor (src passed through).
     var onImageMenu: ((String) -> Void)?
+    var onBlockEdit: ((Int) -> Void)?
+    var onBlockDelete: ((Int) -> Void)?
+    var onBlockInsert: ((String, String?) -> Void)?
+    var onImagePick: (() -> Void)?
 
     private var pendingLoad: String?
     private var pendingMode: (mode: String, lock: Bool)?
@@ -89,6 +93,22 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
             js += " var __ms = document.querySelector('.toastui-editor-mode-switch'); if (__ms) __ms.style.display = 'none';"
         }
         webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    /// Scroll the canvas to a vaulted block after a reload.
+    func revealVault(_ index: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.webView.evaluateJavaScript("window.__revealVault && window.__revealVault(\(index));",
+                                             completionHandler: nil)
+        }
+    }
+
+    /// Drop the plain-text insertion marker at the caret (Swift-initiated
+    /// inserts: toolbar menu, figure flow).
+    func placeInsertionMarker() {
+        webView.evaluateJavaScript(
+            "window.__editor && window.__editor.focus(); window.__placeMarker && window.__placeMarker();",
+            completionHandler: nil)
     }
 
     func setTypewriter(_ on: Bool) {
@@ -138,6 +158,14 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
             if let md = body["md"] as? String { onChange?(md) }
         case "imgmenu":
             if let src = body["src"] as? String { onImageMenu?(src) }
+        case "blockedit":
+            if let i = body["vault"] as? Int { onBlockEdit?(i) }
+        case "blockdelete":
+            if let i = body["vault"] as? Int { onBlockDelete?(i) }
+        case "blockinsert":
+            onBlockInsert?((body["kind"] as? String) ?? "", body["text"] as? String)
+        case "imagepick":
+            onImagePick?()
         case "image":
             if let id = body["id"] as? String,
                let name = body["name"] as? String,
@@ -178,11 +206,54 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         border-radius: 8px; padding: 0.7rem 1rem; margin: 1.2rem 0; }
       .toastui-editor-contents figcaption { font-size: 0.85em; color: #6B7280;
         font-family: 'Inter', sans-serif; margin-top: 4px; }
-      #slashmenu { position: fixed; z-index: 999; background: #fff; border: 1px solid #E5E7EB;
-        border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); display: none;
-        font-family: 'Inter', sans-serif; font-size: 13px; min-width: 190px; }
-      #slashmenu div { padding: 7px 12px; cursor: pointer; }
-      #slashmenu div.sel { background: #EDF1F7; color: #1F3A5F; }
+      .toastui-editor-mode-switch { display: none !important; }
+      .toastui-editor-ww-container [data-vault]:hover { outline: 2px solid #C5D4E8;
+        outline-offset: 3px; border-radius: 3px; cursor: default; }
+      #bubble { position: fixed; z-index: 1000; display: none; background: #1F2A37;
+        border-radius: 9px; padding: 3px 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+        font-family: 'Inter', sans-serif; white-space: nowrap; }
+      #bubble button { background: none; border: none; color: #fff; font-size: 12.5px;
+        padding: 6px 9px; border-radius: 6px; cursor: pointer; font-family: inherit; }
+      #bubble button:hover { background: rgba(255,255,255,0.16); }
+      #bubble .sep { display: inline-block; width: 1px; height: 16px;
+        background: rgba(255,255,255,0.25); margin: 0 3px; vertical-align: middle; }
+      #bubble input { background: #111827; border: 1px solid #374151; color: #fff;
+        font-size: 12px; padding: 5px 8px; border-radius: 6px; margin: 3px;
+        width: 250px; font-family: inherit; display: none; }
+      #plusbtn { position: fixed; z-index: 999; display: none; width: 24px; height: 24px;
+        border-radius: 12px; border: 1px solid #D6DDE7; background: #fff; color: #1F3A5F;
+        font-size: 16px; line-height: 21px; text-align: center; cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.10); user-select: none; }
+      #plusbtn:hover { background: #F2F6FB; }
+      #gallery { position: fixed; z-index: 1001; display: none; width: 560px;
+        max-height: 430px; overflow: auto; background: #fff; border: 1px solid #E5E7EB;
+        border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.18); padding: 12px;
+        font-family: 'Inter', sans-serif; }
+      #gallery h4 { margin: 2px 4px 10px; font-size: 11px; text-transform: uppercase;
+        letter-spacing: 0.06em; color: #6B7280; font-weight: 600; }
+      #gallery .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .bcard { border: 1px solid #E5E7EB; border-radius: 10px; padding: 10px; cursor: pointer; }
+      .bcard.sel, .bcard:hover { border-color: #1F3A5F; background: #F4F7FB; }
+      .bprev { height: 56px; overflow: hidden; pointer-events: none; margin-bottom: 8px; }
+      .bprev .inner { transform: scale(0.55); transform-origin: top left; width: 182%;
+        font-family: 'EB Garamond', Georgia, serif; font-size: 15px; }
+      .bprev .inner .pull-quote { border-left: 3px solid #C9B58C; padding: 4px 0 4px 12px;
+        font-style: italic; margin: 0; }
+      .bprev .inner .callout { border: 1px solid #d5e3f5; background: #eef4fc;
+        border-radius: 8px; padding: 6px 10px; margin: 0; }
+      .bprev .inner .callout--warn { border-color: #f0dcb8; background: #fdf6e7; }
+      .bprev .inner .keyfacts { border: 1px solid #E5E7EB; background: #FAFAF8;
+        border-radius: 8px; padding: 6px 10px; margin: 0; }
+      .bprev .inner figcaption { font-size: 0.8em; color: #6B7280; font-family: 'Inter', sans-serif; }
+      .bname { font-size: 12.5px; font-weight: 600; color: #111; }
+      .bdesc { font-size: 11px; color: #6B7280; margin-top: 2px; }
+      #blockbar { position: fixed; z-index: 1000; display: none; background: #1F2A37;
+        border-radius: 8px; padding: 3px 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+        font-family: 'Inter', sans-serif; }
+      #blockbar button { background: none; border: none; color: #fff; font-size: 12px;
+        padding: 5px 10px; border-radius: 5px; cursor: pointer; font-family: inherit; }
+      #blockbar button:hover { background: rgba(255,255,255,0.16); }
+      #blockbar button.del:hover { background: #7F1D1D; }
       body.typewriter .toastui-editor-contents { padding-bottom: 55vh; padding-top: 20vh; }
       body.typewriter .toastui-editor-contents > * { opacity: 0.35; transition: opacity 0.25s ease; }
       body.typewriter .toastui-editor-contents > .tw-active { opacity: 1; }
@@ -204,6 +275,24 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         initialEditType: 'wysiwyg',
         previewStyle: 'tab',
         usageStatistics: false,
+        customHTMLRenderer: {
+          htmlBlock: {
+            div: function (node) {
+              return [
+                { type: 'openTag', tagName: 'div', outerNewLine: true, attributes: node.attrs },
+                { type: 'html', content: node.childrenHTML },
+                { type: 'closeTag', tagName: 'div', outerNewLine: true }
+              ];
+            },
+            figure: function (node) {
+              return [
+                { type: 'openTag', tagName: 'figure', outerNewLine: true, attributes: node.attrs },
+                { type: 'html', content: node.childrenHTML },
+                { type: 'closeTag', tagName: 'figure', outerNewLine: true }
+              ];
+            }
+          }
+        },
         autofocus: false,
         toolbarItems: [
           ['heading', 'bold', 'italic'],
@@ -243,68 +332,270 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         setTimeout(function () { suppress = false; }, 80);
       };
       window.insertMarkdown = function (md) {
-        editor.insertText(md);
+        try { editor.replaceSelection(md); } catch (e) { editor.insertText(md); }
       };
       window.__imageUploaded = function (id, path) {
         var cb = imageCallbacks[id];
         if (cb) { cb(path, ''); delete imageCallbacks[id]; }
       };
 
-      // ── Slash menu (type "/" on an empty line) ─────────────────
-      window.__blocks = window.__blocks || [];
-      var menu = document.createElement('div');
-      menu.id = 'slashmenu';
-      document.body.appendChild(menu);
-      var menuIdx = 0;
+      // ── Design-block cards: rendered, atomic, click-to-edit ────
+      var NL = String.fromCharCode(10);
+      var mo = new MutationObserver(function () {
+        var els = document.querySelectorAll('.toastui-editor-ww-container [data-vault]:not([contenteditable])');
+        for (var i = 0; i < els.length; i++) els[i].setAttribute('contenteditable', 'false');
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
 
-      function hideMenu() { menu.style.display = 'none'; }
-      function renderMenu() {
-        menu.innerHTML = '';
-        window.__blocks.forEach(function (b, i) {
-          var row = document.createElement('div');
-          row.textContent = b.label;
-          if (i === menuIdx) row.className = 'sel';
-          row.onmousedown = function (ev) { ev.preventDefault(); chooseBlock(i); };
-          menu.appendChild(row);
-        });
+      var blockbar = document.createElement('div');
+      blockbar.id = 'blockbar';
+      var bbEdit = document.createElement('button');
+      bbEdit.textContent = 'Edit';
+      var bbDel = document.createElement('button');
+      bbDel.textContent = 'Delete';
+      bbDel.className = 'del';
+      blockbar.appendChild(bbEdit); blockbar.appendChild(bbDel);
+      document.body.appendChild(blockbar);
+      var barTarget = null;
+      function hideBlockbar() { blockbar.style.display = 'none'; barTarget = null; }
+      bbEdit.onclick = function () {
+        if (barTarget) bridge.postMessage({ type: 'blockedit', vault: parseInt(barTarget.getAttribute('data-vault'), 10) });
+        hideBlockbar();
+      };
+      bbDel.onclick = function () {
+        if (barTarget) bridge.postMessage({ type: 'blockdelete', vault: parseInt(barTarget.getAttribute('data-vault'), 10) });
+        hideBlockbar();
+      };
+      document.addEventListener('click', function (ev) {
+        var el = ev.target && ev.target.closest ? ev.target.closest('[data-vault]') : null;
+        if (el && el.closest('.toastui-editor-ww-container')) {
+          barTarget = el;
+          var r = el.getBoundingClientRect();
+          blockbar.style.display = 'block';
+          blockbar.style.left = Math.max(8, r.left) + 'px';
+          blockbar.style.top = Math.max(8, r.top - 38) + 'px';
+        } else if (!blockbar.contains(ev.target)) hideBlockbar();
+      });
+      window.__revealVault = function (i) {
+        var el = document.querySelector('[data-vault~=' + JSON.stringify(String(i)) + ']') ||
+                 document.querySelector('[data-vault]');
+        var els = document.querySelectorAll('[data-vault]');
+        for (var k = 0; k < els.length; k++) {
+          if (els[k].getAttribute('data-vault') === String(i)) { el = els[k]; break; }
+        }
+        if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      };
+
+      // ── Floating format bubble (Canva/Medium style) ────────────
+      var bubble = document.createElement('div');
+      bubble.id = 'bubble';
+      function bbtn(label, title, fn) {
+        var b = document.createElement('button');
+        b.textContent = label; b.title = title;
+        b.onmousedown = function (ev) { ev.preventDefault(); };
+        b.onclick = function (ev) { ev.preventDefault(); fn(); };
+        bubble.appendChild(b);
+        return b;
       }
-      function chooseBlock(i) {
-        var b = window.__blocks[i];
-        hideMenu();
-        if (!b) return;
-        // remove the typed "/" then insert the block markup
-        try { editor.replaceSelection('', [1, 1], [1, 1]); } catch (e) {}
-        try {
-          var sel = editor.getSelection();
-          editor.replaceSelection(b.md);
-        } catch (e) { editor.insertText(b.md); }
+      function sep() { var d = document.createElement('span'); d.className = 'sep'; bubble.appendChild(d); }
+      function hideBubble() { bubble.style.display = 'none'; linkInput.style.display = 'none'; }
+      bbtn('B', 'Bold', function () { editor.exec('bold'); });
+      bbtn('I', 'Italic', function () { editor.exec('italic'); });
+      sep();
+      bbtn('H2', 'Heading 2', function () { editor.exec('heading', { level: 2 }); hideBubble(); });
+      bbtn('H3', 'Heading 3', function () { editor.exec('heading', { level: 3 }); hideBubble(); });
+      sep();
+      bbtn('Quote', 'Blockquote', function () { editor.exec('blockQuote'); hideBubble(); });
+      bbtn('Pull-quote', 'Lift this sentence into a styled pull quote', function () {
+        var t = '';
+        try { t = editor.getSelectedText() || ''; } catch (e) {}
+        if (!t) { hideBubble(); return; }
+        placeMarker();
+        hideBubble();
+        bridge.postMessage({ type: 'blockinsert', kind: 'pullquote', text: t });
+      });
+      sep();
+      bbtn('Link', 'Add link', function () {
+        linkInput.style.display = linkInput.style.display === 'inline-block' ? 'none' : 'inline-block';
+        if (linkInput.style.display === 'inline-block') linkInput.focus();
+      });
+      var linkInput = document.createElement('input');
+      linkInput.placeholder = 'https://…  (Enter)';
+      linkInput.onmousedown = function (ev) { ev.stopPropagation(); };
+      linkInput.onkeydown = function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          var url = linkInput.value.trim();
+          if (url) {
+            var txt = '';
+            try { txt = editor.getSelectedText() || url; } catch (e) { txt = url; }
+            editor.exec('addLink', { linkUrl: url, linkText: txt });
+          }
+          linkInput.value = '';
+          hideBubble();
+        }
+        if (ev.key === 'Escape') hideBubble();
+      };
+      bubble.appendChild(linkInput);
+      document.body.appendChild(bubble);
+
+      var bubbleTimer = null;
+      function updateBubble() {
+        var sel = window.getSelection();
+        if (!sel || sel.isCollapsed || !sel.rangeCount) { hideBubble(); return; }
+        var range = sel.getRangeAt(0);
+        var el = range.commonAncestorContainer;
+        el = el.nodeType === 1 ? el : el.parentElement;
+        if (!el || !el.closest('.toastui-editor-ww-container') || el.closest('[data-vault]')) { hideBubble(); return; }
+        var rect = range.getBoundingClientRect();
+        if (!rect || (!rect.width && !rect.height)) { hideBubble(); return; }
+        bubble.style.display = 'block';
+        var left = rect.left + rect.width / 2 - bubble.offsetWidth / 2;
+        left = Math.max(8, Math.min(left, window.innerWidth - bubble.offsetWidth - 8));
+        var top = rect.top - bubble.offsetHeight - 8;
+        if (top < 8) top = rect.bottom + 8;
+        bubble.style.left = left + 'px';
+        bubble.style.top = top + 'px';
       }
-      document.addEventListener('keydown', function (ev) {
-        var open = menu.style.display === 'block';
-        if (open) {
-          if (ev.key === 'ArrowDown') { ev.preventDefault(); menuIdx = (menuIdx + 1) % window.__blocks.length; renderMenu(); return; }
-          if (ev.key === 'ArrowUp') { ev.preventDefault(); menuIdx = (menuIdx + window.__blocks.length - 1) % window.__blocks.length; renderMenu(); return; }
-          if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); chooseBlock(menuIdx); return; }
-          if (ev.key === 'Escape') { hideMenu(); return; }
-          if (ev.key.length === 1 || ev.key === 'Backspace') { hideMenu(); }
+      document.addEventListener('selectionchange', function () {
+        if (bubbleTimer) clearTimeout(bubbleTimer);
+        bubbleTimer = setTimeout(updateBubble, 140);
+      });
+
+      // ── "+" handle + visual block gallery ──────────────────────
+      window.__blocks = window.__blocks || [];
+      var plus = document.createElement('div');
+      plus.id = 'plusbtn';
+      plus.textContent = '+';
+      plus.title = 'Insert a block here';
+      document.body.appendChild(plus);
+      var plusTarget = null;
+
+      function wwRoot() { return document.querySelector('.toastui-editor-ww-container .ProseMirror'); }
+      document.addEventListener('mousemove', function (ev) {
+        var root = wwRoot();
+        if (!root) return;
+        if (ev.target === plus) return;
+        var t = ev.target;
+        if (!root.contains(t)) {
+          if (!plus.contains(ev.target)) plus.style.display = 'none';
           return;
         }
-        if (ev.key === '/') {
-          var sel = window.getSelection();
-          if (!sel || !sel.anchorNode) return;
-          var text = (sel.anchorNode.textContent || '').trim();
-          if (text !== '') return;             // only on empty lines
-          var rect = sel.getRangeAt(0).getBoundingClientRect();
-          menuIdx = 0;
-          renderMenu();
-          menu.style.left = Math.min(rect.left, window.innerWidth - 210) + 'px';
-          menu.style.top = (rect.bottom + 6) + 'px';
-          menu.style.display = 'block';
+        while (t && t.parentElement !== root) t = t.parentElement;
+        if (!t || t.hasAttribute('data-vault')) { plus.style.display = 'none'; return; }
+        plusTarget = t;
+        var r = t.getBoundingClientRect();
+        var rr = root.getBoundingClientRect();
+        plus.style.display = 'block';
+        plus.style.left = (rr.left - 32) + 'px';
+        plus.style.top = (r.top + 1) + 'px';
+      });
+
+      var gallery = document.createElement('div');
+      gallery.id = 'gallery';
+      document.body.appendChild(gallery);
+      var gIdx = 0, gOpen = false, slashTriggered = false;
+      function closeGallery() { gallery.style.display = 'none'; gOpen = false; }
+      function renderGallery() {
+        gallery.innerHTML = '';
+        var h = document.createElement('h4');
+        h.textContent = 'Insert block';
+        gallery.appendChild(h);
+        var grid = document.createElement('div');
+        grid.className = 'cards';
+        window.__blocks.forEach(function (b, i) {
+          var card = document.createElement('div');
+          card.className = 'bcard' + (i === gIdx ? ' sel' : '');
+          var prev = document.createElement('div');
+          prev.className = 'bprev';
+          var inner = document.createElement('div');
+          inner.className = 'inner';
+          inner.innerHTML = b.preview || '';
+          prev.appendChild(inner);
+          var name = document.createElement('div');
+          name.className = 'bname';
+          name.textContent = b.label;
+          var desc = document.createElement('div');
+          desc.className = 'bdesc';
+          desc.textContent = b.desc || '';
+          card.appendChild(prev); card.appendChild(name); card.appendChild(desc);
+          card.onmousedown = function (ev) { ev.preventDefault(); chooseCard(i); };
+          grid.appendChild(card);
+        });
+        gallery.appendChild(grid);
+      }
+      function openGallery(anchorRect) {
+        gIdx = 0;
+        renderGallery();
+        gallery.style.display = 'block';
+        var left = Math.min(anchorRect.left, window.innerWidth - 580);
+        var top = anchorRect.bottom + 8;
+        if (top + Math.min(gallery.offsetHeight, 430) > window.innerHeight - 8) {
+          top = Math.max(8, anchorRect.top - gallery.offsetHeight - 8);
         }
+        gallery.style.left = Math.max(8, left) + 'px';
+        gallery.style.top = top + 'px';
+        gOpen = true;
+      }
+      function placeMarker() {
+        try { editor.replaceSelection(NL + NL + '@@BLOCKINS@@' + NL + NL); }
+        catch (e) { editor.insertText(NL + NL + '@@BLOCKINS@@' + NL + NL); }
+      }
+      window.__placeMarker = placeMarker;
+      function chooseCard(i) {
+        var b = window.__blocks[i];
+        var wasSlash = slashTriggered;
+        slashTriggered = false;
+        closeGallery();
+        if (!b) return;
+        if (wasSlash) { try { document.execCommand('delete'); } catch (e) {} }
+        placeMarker();
+        if (b.action === 'imagepick') { bridge.postMessage({ type: 'imagepick' }); return; }
+        bridge.postMessage({ type: 'blockinsert', kind: b.id });
+      }
+      plus.onmousedown = function (ev) { ev.preventDefault(); };
+      plus.onclick = function () {
+        if (!plusTarget) return;
+        var range = document.createRange();
+        range.selectNodeContents(plusTarget);
+        range.collapse(false);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        slashTriggered = false;
+        openGallery(plusTarget.getBoundingClientRect());
+      };
+      document.addEventListener('keydown', function (ev) {
+        if (!gOpen) {
+          if (ev.key === '/') {
+            var sel = window.getSelection();
+            if (!sel || !sel.anchorNode) return;
+            var el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+            if (!el || !el.closest('.toastui-editor-ww-container')) return;
+            var text = (sel.anchorNode.textContent || '').trim();
+            if (text !== '') return;
+            slashTriggered = true;
+            setTimeout(function () {
+              var r = window.getSelection().getRangeAt(0).getBoundingClientRect();
+              openGallery(r);
+            }, 0);
+          }
+          return;
+        }
+        var n = window.__blocks.length;
+        if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') { ev.preventDefault(); gIdx = (gIdx + (ev.key === 'ArrowDown' ? 2 : 1)) % n; renderGallery(); return; }
+        if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') { ev.preventDefault(); gIdx = (gIdx + n - (ev.key === 'ArrowUp' ? 2 : 1)) % n; renderGallery(); return; }
+        if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); chooseCard(gIdx); return; }
+        if (ev.key === 'Escape') { slashTriggered = false; closeGallery(); return; }
+        if (ev.key.length === 1 || ev.key === 'Backspace') { slashTriggered = false; closeGallery(); }
       }, true);
       document.addEventListener('mousedown', function (ev) {
-        if (!menu.contains(ev.target)) hideMenu();
+        if (gOpen && !gallery.contains(ev.target) && ev.target !== plus) { slashTriggered = false; closeGallery(); }
       });
+      document.addEventListener('scroll', function () {
+        hideBlockbar(); hideBubble(); plus.style.display = 'none';
+        if (gOpen) { slashTriggered = false; closeGallery(); }
+      }, true);
 
       // ── Typewriter mode (focus): centered caret + paragraph spotlight ──
       var twOn = false;

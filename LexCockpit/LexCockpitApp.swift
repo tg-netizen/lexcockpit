@@ -19,6 +19,12 @@ struct LexCockpitApp: App {
            CommandLine.arguments.indices.contains(i + 1) {
             RoundtripTest.start(dir: CommandLine.arguments[i + 1])
         }
+        // `--editor-uitest` → functional battery against the real editor
+        // shell: gallery/bubble/plus exist, block cards render, insertion
+        // produces correct markdown through the vault.
+        if CommandLine.arguments.contains("--editor-uitest") {
+            EditorUITest.start()
+        }
         // `--oauth-callback-test` → start the loopback listener with a known
         // state and wait for one curl; verifies the real OAuth receiver.
         if CommandLine.arguments.contains("--oauth-callback-test") {
