@@ -136,14 +136,19 @@ final class CockpitStore: ObservableObject {
         var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 20
+        let started = Date()
         let (data, resp): (Data, URLResponse)
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
+            diagRecord("feeds", "GET \(kind.file)", status: "offline", start: started, ok: false)
             // Network down → serve the last successful payload with a badge.
             if let cached: T = Self.decodeCached(kind, into: self) { return cached }
             throw error
         }
+        diagRecord("feeds", "GET \(kind.file)",
+                   status: "\((resp as? HTTPURLResponse)?.statusCode ?? 0)",
+                   start: started, ok: ((resp as? HTTPURLResponse)?.statusCode ?? 0) < 300)
 
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             let hint = http.statusCode == 401

@@ -324,7 +324,11 @@ enum CanvaAPI {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: json)
         }
+        let started = Date()
         let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        diagRecord("canva", "\(method) \(path.prefix(60))", status: "\(code)",
+                   start: started, ok: (200..<300).contains(code))
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw CanvaError.http(http.statusCode, String(data: data.prefix(300), encoding: .utf8) ?? "")
         }

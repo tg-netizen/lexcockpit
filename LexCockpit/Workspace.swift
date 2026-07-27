@@ -620,6 +620,7 @@ struct SettingsSheet: View {
     @State private var refreshMinutes = max(UserDefaults.standard.integer(forKey: "refreshMinutes"), 0)
     @State private var canvaID = ""
     @State private var canvaSecret = ""
+    @State private var showDiagnostics = false
     @State private var plausibleKey = ""
     @State private var mailerliteKey = ""
     @ObservedObject private var canva = CanvaAuth.shared
@@ -743,6 +744,8 @@ struct SettingsSheet: View {
             }
             Divider()
             HStack {
+                Button("Diagnostics…") { showDiagnostics = true }
+                    .controlSize(.small)
                 if saved { Label("Saved to Keychain", systemImage: "checkmark.circle.fill").foregroundColor(.stApplied) }
                 Spacer()
                 Button(onboarding ? "Los geht's" : "Close") {
@@ -771,6 +774,7 @@ struct SettingsSheet: View {
             .background(Color.bgCard)
         }
         .frame(width: 560, height: 640)
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsSheet() }
     }
 
     private func testRow(_ id: String, _ label: String,

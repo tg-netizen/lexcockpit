@@ -48,7 +48,10 @@ enum NetlifyAPI {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 20
+        let started = Date()
         let (data, resp) = try await URLSession.shared.data(for: req)
+        diagRecord("netlify", "GET deploys", status: "\((resp as? HTTPURLResponse)?.statusCode ?? 0)",
+                   start: started, ok: ((resp as? HTTPURLResponse)?.statusCode ?? 0) < 300)
         try check(resp, data)
         return try JSONDecoder().decode([NetlifyDeploy].self, from: data)
     }
@@ -134,7 +137,19 @@ enum GitHubAPI {
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         req.setValue("LexCockpit", forHTTPHeaderField: "User-Agent")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let started = Date()
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req)
+        } catch {
+            diagRecord("github", "\(method) \(path.prefix(70))", status: "offline", start: started, ok: false)
+            throw error
+        }
+        if let http = resp as? HTTPURLResponse {
+            diagRecord("github", "\(method) \(path.prefix(70))",
+                       status: "\(http.statusCode)", start: started,
+                       ok: (200..<300).contains(http.statusCode))
+        }
         if let http = resp as? HTTPURLResponse {
             // 409 (ref out of date) and 422 with a sha complaint = concurrent edit.
             if http.statusCode == 409 { throw APIError.conflict }
