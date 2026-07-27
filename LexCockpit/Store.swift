@@ -274,14 +274,19 @@ final class CockpitStore: ObservableObject {
     func loadProjectsFromBundle() {
         if projects.isEmpty, let url = BookmarkStore.resolve(BookmarkStore.projectsJSON) {
             loadProjects(from: url)
-            if !projects.isEmpty { return }
+            // A LEGACY projects.json (pre-`sites`) must not leave the hub
+            // empty — fall through to the bundle for the site config.
+            if !projects.isEmpty && !baseSites.isEmpty { return }
         }
-        guard projects.isEmpty,
+        guard baseSites.isEmpty,
               let url = resourceBundle.url(forResource: "projects", withExtension: "json"),
               let data = try? Data(contentsOf: url),
-              let pf = try? JSONDecoder().decode(ProjectsFile.self, from: data) else { return }
-        projects = pf.projects
-        if baseSites.isEmpty { baseSites = pf.sites ?? [] }
+              let pf = try? JSONDecoder().decode(ProjectsFile.self, from: data) else {
+            refreshSites()          // still merge user-added projects
+            return
+        }
+        if projects.isEmpty { projects = pf.projects }
+        baseSites = pf.sites ?? []
         refreshSites()
     }
 

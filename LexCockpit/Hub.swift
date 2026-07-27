@@ -18,105 +18,97 @@ enum UserProjects {
     }
 }
 
-// MARK: - Project hub (the app's home: your projects first, digest second)
+// MARK: - Home: greeting, project cards with direct actions, Today rail
 
 struct ProjectHubView: View {
     @EnvironmentObject var store: CockpitStore
     var navigate: (SidebarSelection) -> Void
     @State private var showAdd = false
 
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12:  return "Good morning"
+        case 12..<18: return "Good afternoon"
+        default:      return "Good evening"
+        }
+    }
+
+    private var todayLine: String {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, d MMMM"
+        return f.string(from: Date())
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Projects")
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundColor(.textPrimary)
-                    Text("Everything you run — status at a glance, one click to work.")
-                        .font(.callout).foregroundColor(.textSecondary)
-                }
-
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)],
-                          spacing: 16) {
-                    ForEach(store.sites) { site in
-                        ProjectTile(site: site,
-                                    isUserAdded: store.isUserSite(site.id),
-                                    open: { navigate(.site(site.id)) },
-                                    remove: { store.removeUserSite(site.id) })
+            HStack(alignment: .top, spacing: 24) {
+                // ── Left: greeting + projects ──
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(greeting)
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.textPrimary)
+                        Text(todayLine)
+                            .font(.system(size: 14))
+                            .foregroundColor(.textSecondary)
                     }
-                    AddProjectTile { showAdd = true }
-                }
 
-                digest
+                    sectionLabel("Your projects")
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 16)],
+                              spacing: 16) {
+                        ForEach(store.sites) { site in
+                            ProjectCard(site: site,
+                                        isUserAdded: store.isUserSite(site.id),
+                                        openTab: { tab in openProject(site, tab: tab) },
+                                        remove: { store.removeUserSite(site.id) })
+                        }
+                        AddProjectTile { showAdd = true }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // ── Right: Today rail ──
+                TodayRail(navigate: navigate)
+                    .frame(width: 292)
             }
             .padding(28)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color.bgPage)
         .sheet(isPresented: $showAdd) { AddProjectSheet() }
     }
 
-    // Regulatory digest — secondary, compact.
-    @ViewBuilder private var digest: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("EU regulation at a glance")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundColor(.textPrimary)
-                .padding(.top, 6)
-
-            LazyVGrid(columns: grid(min: 150), spacing: 12) {
-                StatTile(value: "\(store.inForceCount)", label: "Rules in force", accent: .statusGreen)
-                StatTile(value: "\(store.upcomingCount)", label: "Upcoming", accent: .statusAmber)
-                StatTile(value: "\(store.blockedCount)", label: "Blocked / in flux", accent: .statusRed)
-                StatTile(value: "\(store.negotiations.count)", label: "In trilogue")
-            }
-
-            let upcoming = store.regulations
-                .filter { $0.status == .upcoming && ($0.applicationDate ?? "") >= todayISO() }
-                .sorted { ($0.applicationDate ?? "") < ($1.applicationDate ?? "") }
-                .prefix(4)
-
-            FeedStateView(kind: .tracker,
-                          emptyText: "The tracker feed loaded but lists no upcoming deadlines.",
-                          isEmpty: upcoming.isEmpty)
-
-            if !upcoming.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(Array(upcoming)) { r in
-                        Card {
-                            HStack {
-                                Text(prettyDate(r.applicationDate))
-                                    .font(.system(.subheadline, design: .monospaced))
-                                    .foregroundColor(.textSecondary)
-                                    .frame(width: 106, alignment: .leading)
-                                Text(r.name).fontWeight(.semibold).foregroundColor(.textPrimary)
-                                Spacer()
-                                pill(for: r.status)
-                            }
-                        }
-                    }
-                }
-            }
+    private func openProject(_ site: SiteProject, tab: WorkspaceTab?) {
+        if let tab = tab {
+            SessionHub.shared.state.workspaceTab = tab.rawValue
         }
+        SessionHub.shared.state.selectionSite = site.id
+        SessionHub.shared.state.selectionSection = nil
+        navigate(.site(site.id))
+    }
+
+    private func sectionLabel(_ t: String) -> some View {
+        Text(t.uppercased())
+            .font(.system(size: 11, weight: .semibold)).tracking(0.7)
+            .foregroundColor(.textSecondary)
     }
 }
 
-// MARK: - Tiles
+// MARK: - Project card (status + direct paths into the work)
 
-struct ProjectTile: View {
+struct ProjectCard: View {
     let site: SiteProject
     let isUserAdded: Bool
-    var open: () -> Void
+    var openTab: (WorkspaceTab?) -> Void
     var remove: () -> Void
 
     @State private var hovering = false
     @StateObject private var model: WorkspaceModel
 
     init(site: SiteProject, isUserAdded: Bool,
-         open: @escaping () -> Void, remove: @escaping () -> Void) {
+         openTab: @escaping (WorkspaceTab?) -> Void, remove: @escaping () -> Void) {
         self.site = site
         self.isUserAdded = isUserAdded
-        self.open = open
+        self.openTab = openTab
         self.remove = remove
         _model = StateObject(wrappedValue: WorkspaceModel.shared(for: site))
     }
@@ -125,75 +117,89 @@ struct ProjectTile: View {
         String(site.name.split(separator: " ").compactMap(\.first).prefix(2)).uppercased()
     }
 
+    private var continuePath: String? {
+        let s = SessionHub.shared.state
+        guard s.selectionSite == site.id, let path = s.articlePath else { return nil }
+        return path
+    }
+
     var body: some View {
-        Button(action: open) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header — click = open the project
+            Button { openTab(nil) } label: {
+                HStack(spacing: 12) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 9)
-                            .fill(Color.accentNavy)
-                        Text(initials)
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.white)
+                        RoundedRectangle(cornerRadius: 10).fill(Color.accentNavy)
+                        Text(initials).font(.system(size: 16, weight: .bold)).foregroundColor(.white)
                     }
-                    .frame(width: 38, height: 38)
-                    VStack(alignment: .leading, spacing: 1) {
+                    .frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(site.name)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.textPrimary)
-                            .lineLimit(1)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.textPrimary).lineLimit(1)
                         if let url = site.url {
                             Text(url.replacingOccurrences(of: "https://", with: ""))
-                                .font(.system(size: 11.5))
-                                .foregroundColor(.textSecondary)
-                                .lineLimit(1)
+                                .font(.system(size: 12)).foregroundColor(.textSecondary).lineLimit(1)
                         }
                     }
                     Spacer(minLength: 0)
+                    statusChip
                 }
-
-                HStack(spacing: 8) {
-                    if let deploy = model.deploys.first {
-                        Circle().fill(deployColor(deploy.stateKind))
-                            .frame(width: 7, height: 7)
-                        Text("\(deploy.state.capitalized) · \(relativeTime(deploy.created_at))")
-                            .font(.system(size: 11)).foregroundColor(.textSecondary)
-                    } else if let repo = site.repo {
-                        Image(systemName: "chevron.left.forwardslash.chevron.right")
-                            .font(.system(size: 9)).foregroundColor(.textSecondary)
-                        Text(repo).font(.system(size: 11)).foregroundColor(.textSecondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    if !model.contentEntries.isEmpty {
-                        let drafts = model.contentEntries.filter(\.isDraft).count
-                        Text("\(model.contentEntries.count - drafts) live · \(drafts) drafts")
-                            .font(.system(size: 11)).foregroundColor(.textSecondary)
-                    }
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.bgCard)
-                    .shadow(color: .black.opacity(hovering ? 0.10 : 0.04),
-                            radius: hovering ? 10 : 3, x: 0, y: hovering ? 4 : 1)
-            )
-            .overlay(RoundedRectangle(cornerRadius: 14)
-                .stroke(hovering ? Color.accentNavy.opacity(0.45) : Color.cardBorder, lineWidth: 1))
-            .scaleEffect(hovering ? 1.012 : 1.0)
-            .animation(.easeOut(duration: 0.15), value: hovering)
-            .contentShape(RoundedRectangle(cornerRadius: 14))
+
+            // Stats line
+            HStack(spacing: 6) {
+                if !model.contentEntries.isEmpty {
+                    let drafts = model.contentEntries.filter(\.isDraft).count
+                    Text("\(model.contentEntries.count - drafts) live · \(drafts) in draft")
+                } else if let repo = site.repo {
+                    Text(repo)
+                } else {
+                    Text("Not fully configured — add repo & Netlify in the workspace")
+                }
+                Spacer()
+            }
+            .font(.system(size: 11.5)).foregroundColor(.textSecondary)
+            .padding(.horizontal, 18).padding(.bottom, 12)
+
+            Divider().padding(.horizontal, 12)
+
+            // Direct paths — one click into the actual work
+            HStack(spacing: 0) {
+                if let path = continuePath {
+                    actionButton("Continue", icon: "arrow.uturn.right") {
+                        openTab(.content)
+                        Task { await model.openPath(path) }
+                    }
+                } else {
+                    actionButton("Write", icon: "square.and.pencil") { openTab(.content) }
+                }
+                actionButton("Calendar", icon: "calendar") { openTab(.planner) }
+                actionButton("Deploys", icon: "arrow.up.circle") { openTab(.deploys) }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
         }
-        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.bgCard)
+                .shadow(color: .black.opacity(hovering ? 0.12 : 0.04),
+                        radius: hovering ? 11 : 3, x: 0, y: hovering ? 4 : 1)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 14)
+            .stroke(hovering ? Color.accentNavy.opacity(0.4) : Color.cardBorder, lineWidth: 1))
+        .scaleEffect(hovering ? 1.01 : 1.0)
+        .animation(.easeOut(duration: 0.15), value: hovering)
         .onHover { hovering = $0 }
         .contextMenu {
-            if isUserAdded {
-                Button("Remove project", role: .destructive, action: remove)
-            }
             if let urlStr = site.url, let url = URL(string: urlStr) {
                 Button("Open site in browser") { NSWorkspace.shared.open(url) }
+            }
+            if isUserAdded {
+                Divider()
+                Button("Remove project", role: .destructive, action: remove)
             }
         }
         .task {
@@ -201,9 +207,42 @@ struct ProjectTile: View {
                !(site.netlify_site_id ?? "").isEmpty {
                 await model.loadDeploys()
             }
+            if model.contentEntries.isEmpty, Keychain.has(Keychain.githubPAT),
+               site.repo != nil {
+                await model.loadContentList()
+            }
         }
     }
+
+    @ViewBuilder private var statusChip: some View {
+        if let deploy = model.deploys.first {
+            HStack(spacing: 5) {
+                Circle().fill(deployColor(deploy.stateKind)).frame(width: 7, height: 7)
+                Text(deploy.state.capitalized).font(.system(size: 11, weight: .semibold))
+            }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(deployColor(deploy.stateKind).opacity(0.12)))
+            .foregroundColor(deployColor(deploy.stateKind))
+            .help("Last deploy \(relativeTime(deploy.created_at))")
+        }
+    }
+
+    private func actionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 11))
+                Text(title).font(.system(size: 12, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.accentNavy)
+    }
 }
+
+// MARK: - Add tile
 
 struct AddProjectTile: View {
     var action: () -> Void
@@ -214,24 +253,139 @@ struct AddProjectTile: View {
             VStack(spacing: 8) {
                 Image(systemName: "plus")
                     .font(.system(size: 22, weight: .medium))
-                    .foregroundColor(hovering ? .accentNavy : .textSecondary)
-                Text("Add project")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(hovering ? .accentNavy : .textSecondary)
+                Text("Add project").font(.system(size: 13, weight: .medium))
             }
-            .frame(maxWidth: .infinity, minHeight: 106)
+            .foregroundColor(hovering ? .accentNavy : .textSecondary)
+            .frame(maxWidth: .infinity, minHeight: 150)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.bgCard.opacity(hovering ? 1 : 0.5)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(hovering ? Color.accentNavy.opacity(0.5) : Color.cardBorder,
-                                  style: StrokeStyle(lineWidth: 1.2, dash: [5]))
-            )
+            .overlay(RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(hovering ? Color.accentNavy.opacity(0.5) : Color.cardBorder,
+                              style: StrokeStyle(lineWidth: 1.2, dash: [5])))
             .animation(.easeOut(duration: 0.15), value: hovering)
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Add another website project (repo, CMS, Netlify)")
+    }
+}
+
+// MARK: - Today rail (what needs attention, at a glance)
+
+struct TodayRail: View {
+    @EnvironmentObject var store: CockpitStore
+    @ObservedObject private var radar = RadarStore.shared
+    @ObservedObject private var queue = CommitQueue.shared
+    var navigate: (SidebarSelection) -> Void
+
+    private var nextDeadline: Regulation? {
+        store.regulations
+            .filter { $0.status == .upcoming && ($0.applicationDate ?? "") >= todayISO() }
+            .sorted { ($0.applicationDate ?? "") < ($1.applicationDate ?? "") }
+            .first
+    }
+
+    private func daysUntil(_ iso: String?) -> Int? {
+        guard let iso = iso, let date = parseISO(iso) else { return nil }
+        return Calendar.current.dateComponents([.day], from: Date(), to: date).day
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("TODAY")
+                .font(.system(size: 11, weight: .semibold)).tracking(0.7)
+                .foregroundColor(.textSecondary)
+
+            // Next deadline
+            railCard {
+                if let reg = nextDeadline {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text("Next deadline").font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.textSecondary)
+                            Spacer()
+                            if let days = daysUntil(reg.applicationDate) {
+                                Text("in \(days) days")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(.statusAmber)
+                            }
+                        }
+                        Text(reg.name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.textPrimary)
+                        Text(prettyDate(reg.applicationDate))
+                            .font(.system(size: 11)).foregroundColor(.textSecondary)
+                    }
+                } else {
+                    Text("No upcoming deadlines.")
+                        .font(.system(size: 12)).foregroundColor(.textSecondary)
+                }
+            }
+
+            // Radar
+            Button { navigate(.section(.radar)) } label: {
+                railCard {
+                    HStack(spacing: 8) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .foregroundColor(radar.unseenCount > 0 ? .statusAmber : .statusGreen)
+                        Text(radar.unseenCount > 0
+                             ? "\(radar.unseenCount) regulation change\(radar.unseenCount == 1 ? "" : "s") to review"
+                             : "Radar: all caught up")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.textPrimary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10)).foregroundColor(.textSecondary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+
+            // Offline queue, only when relevant
+            if !queue.items.isEmpty {
+                railCard {
+                    HStack(spacing: 8) {
+                        Image(systemName: "icloud.and.arrow.up").foregroundColor(.statusAmber)
+                        Text("\(queue.items.count) queued commit\(queue.items.count == 1 ? "" : "s") waiting for network")
+                            .font(.system(size: 12)).foregroundColor(.textPrimary)
+                    }
+                }
+            }
+
+            // Regulation KPIs, compact
+            Text("EU REGULATION")
+                .font(.system(size: 11, weight: .semibold)).tracking(0.7)
+                .foregroundColor(.textSecondary)
+                .padding(.top, 6)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                miniKPI("\(store.inForceCount)", "In force", .statusGreen)
+                miniKPI("\(store.upcomingCount)", "Upcoming", .statusAmber)
+                miniKPI("\(store.blockedCount)", "Blocked", .statusRed)
+                miniKPI("\(store.negotiations.count)", "Trilogue", .accentNavy)
+            }
+            Button { navigate(.section(.tracker)) } label: {
+                Text("Open the tracker →")
+                    .font(.system(size: 12, weight: .medium)).foregroundColor(.accentNavy)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func railCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgCard))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.cardBorder, lineWidth: 1))
+    }
+
+    private func miniKPI(_ value: String, _ label: String, _ accent: Color) -> some View {
+        railCard {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value).font(.system(size: 18, weight: .bold)).foregroundColor(accent)
+                Text(label).font(.system(size: 10.5)).foregroundColor(.textSecondary)
+            }
+        }
     }
 }
 
