@@ -222,6 +222,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             let message = customMessage
                 ?? ((isNewFile && lastCommitSHA == nil) ? "content: new \(slug)" : "content: edit \(slug)")
             let text = serialized()
+            Snapshots.record(slug: slug, text: text)     // local history, every save
             let resp = try await GitHubAPI.put(repo: repo, path: repoPath,
                                                message: message, text: text, sha: sha)
             loadedSHA = resp.content?.sha ?? loadedSHA
@@ -233,6 +234,19 @@ final class EditorDocument: ObservableObject, Identifiable {
             statusLine = "Committed \(String(resp.commit.sha.prefix(7))) — Netlify build starts automatically"
         } catch APIError.conflict {
             conflict = true
+        } catch let urlErr as URLError {
+            // Offline → queue the commit; it pushes automatically when the
+            // network returns. Baseline moves to the queued text so further
+            // edits diff against what will land.
+            let text = serialized()
+            CommitQueue.shared.enqueue(repo: repo, path: repoPath,
+                                       message: customMessage
+                                           ?? ((isNewFile && lastCommitSHA == nil)
+                                               ? "content: new \(slug)" : "content: edit \(slug)"),
+                                       text: text, sha: loadedSHA)
+            fmDoc = FrontmatterDoc.parse(text)
+            dirty = false
+            statusLine = "Offline (\(urlErr.code == .notConnectedToInternet ? "no connection" : urlErr.localizedDescription)) — commit queued, pushes automatically."
         } catch {
             statusLine = error.localizedDescription
         }
@@ -703,6 +717,7 @@ struct EditorView: View {
     @State private var coverImage: NSImage?
     @State private var showRestore = false
     @AppStorage("typewriterEnabled") private var typewriterOn = true
+    @State private var showHistory = false
     @State private var showPublish = false
     @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
@@ -811,6 +826,14 @@ struct EditorView: View {
                 pendingCanvaEdit = nil
             }
             Button("Cancel", role: .cancel) { pendingCanvaEdit = nil }
+        }
+        .sheet(isPresented: $showHistory) {
+            SnapshotHistorySheet(slug: doc.slug) { text in
+                doc.applyFullText(text)
+                wysiwyg.load(markdown: doc.bodyText)
+                preview.update(markdown: doc.bodyText)
+                doc.statusLine = "Snapshot restored — review and save."
+            }
         }
         .sheet(isPresented: $showCanvaPicker) {
             CanvaPickerSheet { item in
@@ -1035,6 +1058,14 @@ struct EditorView: View {
 
     /// All editor actions live in the native window toolbar (V6).
     @ViewBuilder private var toolbarActions: some View {
+            Button {
+                showHistory = true
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundColor(.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Local history — every save, browsable offline")
             Menu {
                 ForEach(BlockKind.allCases) { block in
                     Button {
@@ -1152,6 +1183,15 @@ struct EditorView: View {
                     Circle().fill(Color.brandGold).frame(width: 7, height: 7)
                     Text("Unsaved")
                 }
+            } else if let queued = CommitQueue.shared.pending(for: doc.repoPath) {
+                HStack(spacing: 4) {
+                    Image(systemName: queued.conflicted ? "exclamationmark.icloud" : "icloud.and.arrow.up")
+                        .foregroundColor(queued.conflicted ? .statusRed : .statusAmber)
+                    Text(queued.conflicted ? "Queue conflict" : "Queued")
+                }
+                .help(queued.conflicted
+                      ? "The queued commit conflicts with a newer remote version — reload and re-apply."
+                      : "Committed locally while offline — pushes automatically when online.")
             } else if let sha = doc.lastCommitSHA {
                 Button {
                     openDeploys()

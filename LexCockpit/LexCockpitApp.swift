@@ -315,6 +315,14 @@ struct ContentView: View {
             await store.loadAll()
             await updates.check()
             await RadarStore.shared.load(base: store.feedBase)
+            _ = await CommitQueue.shared.flush()
+            // Flush queued offline commits once a minute while any exist.
+            Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    if !CommitQueue.shared.items.isEmpty { _ = await CommitQueue.shared.flush() }
+                }
+            }
             // Background refresh honoring the Settings interval (0 = manual).
             while !Task.isCancelled {
                 let minutes = store.refreshMinutes
