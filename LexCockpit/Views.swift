@@ -54,62 +54,7 @@ struct FeedStateView: View {
     }
 }
 
-// MARK: - Dashboard
-
-struct DashboardView: View {
-    @EnvironmentObject var store: CockpitStore
-
-    private var subtitle: String {
-        store.lastFetched.isEmpty ? "Your operation at a glance"
-                                  : "Feeds updated \(relativeTime(store.lastFetched))"
-    }
-
-    var body: some View {
-        Page(title: "Dashboard", subtitle: subtitle) {
-            LazyVGrid(columns: grid(min: 160), spacing: 14) {
-                StatTile(value: "\(store.publishedCount)", label: "Published", accent: .statusGreen)
-                StatTile(value: "\(store.draftCount)", label: "In draft")
-                StatTile(value: "\(store.inForceCount)", label: "Rules in force", accent: .statusGreen)
-                StatTile(value: "\(store.upcomingCount)", label: "Upcoming", accent: .statusAmber)
-                StatTile(value: "\(store.blockedCount)", label: "Blocked / in flux", accent: .statusRed)
-                StatTile(value: "\(store.negotiations.count)", label: "In trilogue")
-            }
-
-            Text("Next deadlines")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.textPrimary)
-                .padding(.top, 8)
-
-            let upcoming = store.regulations
-                .filter { $0.status == .upcoming && ($0.applicationDate ?? "") >= todayISO() }
-                .sorted { ($0.applicationDate ?? "") < ($1.applicationDate ?? "") }
-                .prefix(6)
-
-            FeedStateView(kind: .tracker,
-                          emptyText: "The tracker feed loaded but lists no upcoming deadlines.",
-                          isEmpty: upcoming.isEmpty)
-
-            if !upcoming.isEmpty {
-                VStack(spacing: 10) {
-                    ForEach(Array(upcoming)) { r in
-                        Card {
-                            HStack {
-                                Text(prettyDate(r.applicationDate))
-                                    .font(.system(.subheadline, design: .monospaced))
-                                    .foregroundColor(.textSecondary)
-                                    .frame(width: 110, alignment: .leading)
-                                Text(r.name).fontWeight(.semibold).foregroundColor(.textPrimary)
-                                Spacer()
-                                pill(for: r.status)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .help(store.lastFetched.isEmpty ? "" : "Last fetch: \(store.lastFetched)")
-    }
-}
+// (The old feeds dashboard became the Project Hub — see Hub.swift.)
 
 // (The editorial-pipeline grid lives in the project workspace —
 //  see OverviewTabView in Workspace.swift.)

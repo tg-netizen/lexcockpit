@@ -186,7 +186,7 @@ enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .dashboard:   return "Dashboard"
+        case .dashboard:   return "Home"
         case .radar:       return "Radar"
         case .analytics:   return "Analytics"
         case .tracker:     return "Tracker"
@@ -494,7 +494,7 @@ struct ContentView: View {
 
     @ViewBuilder private var detailView: some View {
         switch selection ?? .section(.dashboard) {
-        case .section(.dashboard):   DashboardView()
+        case .section(.dashboard):   ProjectHubView(navigate: { selection = $0 })
         case .section(.radar):       RadarView()
         case .section(.analytics):   AnalyticsView()
         case .section(.tracker):     TrackerView()

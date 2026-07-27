@@ -52,10 +52,41 @@ final class CockpitStore: ObservableObject {
     /// distinguish "genuinely empty" from "failed or not yet loaded".
     @Published var feedLoaded: Set<FeedKind> = []
 
+    /// Projects from the bundled/imported projects.json (base) — user-added
+    /// ones (hub "+") are merged on top and persisted separately.
+    private var baseSites: [SiteProject] = []
+
     init() {
         // Sidebar + workspaces render instantly from the local projects file;
         // network feeds arrive after first paint.
         loadProjectsFromBundle()
+    }
+
+    private func refreshSites() {
+        var merged = baseSites
+        for user in UserProjects.load() where !merged.contains(where: { $0.id == user.id }) {
+            merged.append(user)
+        }
+        sites = merged
+    }
+
+    func addUserSite(_ site: SiteProject) {
+        var user = UserProjects.load()
+        user.removeAll { $0.id == site.id }
+        user.append(site)
+        UserProjects.save(user)
+        refreshSites()
+    }
+
+    func removeUserSite(_ id: String) {
+        var user = UserProjects.load()
+        user.removeAll { $0.id == id }
+        UserProjects.save(user)
+        refreshSites()
+    }
+
+    func isUserSite(_ id: String) -> Bool {
+        UserProjects.load().contains { $0.id == id }
     }
 
     // MARK: Settings (non-secret → UserDefaults; tokens live in the Keychain)
@@ -238,7 +269,8 @@ final class CockpitStore: ObservableObject {
               let data = try? Data(contentsOf: url),
               let pf = try? JSONDecoder().decode(ProjectsFile.self, from: data) else { return }
         projects = pf.projects
-        if sites.isEmpty { sites = pf.sites ?? [] }
+        if baseSites.isEmpty { baseSites = pf.sites ?? [] }
+        refreshSites()
     }
 
     /// Load your real projects.json (generate it with scripts/build-projects.js).
@@ -249,7 +281,8 @@ final class CockpitStore: ObservableObject {
             return
         }
         projects = pf.projects
-        if let s = pf.sites, !s.isEmpty { sites = s }
+        if let s = pf.sites, !s.isEmpty { baseSites = s }
+        refreshSites()
     }
 
     // Convenience counts for the dashboard
