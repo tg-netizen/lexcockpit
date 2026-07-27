@@ -72,4 +72,28 @@ enum Keychain {
     }
 
     static func has(_ account: String) -> Bool { get(account) != nil }
+
+    /// Every token account the app uses (extensions add Canva/analytics ids).
+    static let allAccounts = [
+        netlifyPAT, netlifyBuildHook, githubPAT,
+        "canva_client_id", "canva_client_secret",
+        "canva_access_token", "canva_refresh_token",
+        "plausible_api_key", "mailerlite_api_key",
+    ]
+
+    /// One-time ownership adoption: items created by OLD builds belong to a
+    /// different code signature, so macOS asks permission on every new build.
+    /// Re-creating each item from THIS (stably signed) build makes the app
+    /// the item's creator — no ACL prompts ever again. Runs once; a denied
+    /// item is simply skipped.
+    static func adoptOwnership() {
+        let marker = "keychainOwned_LexCockpitDev_v1"
+        guard !UserDefaults.standard.bool(forKey: marker) else { return }
+        for account in allAccounts {
+            guard let value = get(account) else { continue }   // may prompt once
+            _ = delete(account)
+            _ = set(account, value)                            // we are the creator now
+        }
+        UserDefaults.standard.set(true, forKey: marker)
+    }
 }

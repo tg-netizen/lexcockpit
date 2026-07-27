@@ -35,6 +35,8 @@ struct LexCockpitApp: App {
             }
             dispatchMain()
         }
+        // One-time keychain ownership adoption (kills recurring ACL prompts).
+        Keychain.adoptOwnership()
         // Under `swift run` there is no app bundle — promote to a regular
         // foreground app so the window appears and takes focus.
         DispatchQueue.main.async {
