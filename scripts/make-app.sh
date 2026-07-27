@@ -37,9 +37,12 @@ if [ ! -f "$ROOT/scripts/AppIcon.icns" ]; then
 fi
 ditto --noextattr --noqtn "$ROOT/scripts/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
-echo "── Ad-hoc codesigning…"
+# Prefer the stable "LexCockpit Dev" identity (scripts/make-dev-cert.sh) —
+# keeps the signature constant across rebuilds so keychain approvals stick.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep 'LexCockpit Dev' | head -1 | awk '{print $2}' || true)"
+echo "── Codesigning (${IDENTITY:+stable identity}${IDENTITY:-ad-hoc})…"
 xattr -cr "$APP" 2>/dev/null || true
-codesign --force --deep -s - "$APP"
+codesign --force --deep -s "${IDENTITY:--}" "$APP"
 codesign --verify --strict "$APP"
 
 rm -rf "$ROOT/dist"

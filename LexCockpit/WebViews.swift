@@ -106,6 +106,15 @@ struct CMSTabView: View {
                 .padding(.horizontal, 12).padding(.vertical, 7)
                 Divider()
                 WebViewRepresentable(webView: controller.webView)
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle").font(.caption).foregroundColor(.textSecondary)
+                    Text("Articles are best edited in the Content tab. Use the CMS for everything else: atlas countries, pages, data collections and the media library.")
+                        .font(.caption).foregroundColor(.textSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.bgCard)
             }
             .sheet(isPresented: Binding(
                 get: { controller.popup != nil },

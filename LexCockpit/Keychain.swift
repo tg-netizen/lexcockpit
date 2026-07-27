@@ -6,12 +6,20 @@ import Security
 enum Keychain {
     static let service = "com.lexdigestglobal.lexcockpit"
 
+    /// In-memory cache: each item is read from the keychain AT MOST once per
+    /// launch (the ACL prompt, if any, appears once instead of per request).
+    private static var memo: [String: String?] = [:]
+    private static let lock = NSLock()
+
     // Accounts
     static let netlifyPAT = "netlify_pat"
     static let netlifyBuildHook = "netlify_build_hook"
     static let githubPAT = "github_pat"
 
     static func get(_ account: String) -> String? {
+        lock.lock()
+        if let hit = memo[account] { lock.unlock(); return hit }
+        lock.unlock()
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -20,11 +28,15 @@ enum Keychain {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let str = String(data: data, encoding: .utf8),
-              !str.isEmpty else { return nil }
-        return str
+        var result: String? = nil
+        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+           let data = item as? Data,
+           let str = String(data: data, encoding: .utf8),
+           !str.isEmpty {
+            result = str
+        }
+        lock.lock(); memo[account] = result; lock.unlock()
+        return result
     }
 
     @discardableResult
@@ -37,6 +49,7 @@ enum Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+        lock.lock(); memo[account] = trimmed; lock.unlock()
         let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var add = base
@@ -53,6 +66,7 @@ enum Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+        lock.lock(); memo[account] = nil as String?; lock.unlock()
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }

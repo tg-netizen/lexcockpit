@@ -887,6 +887,9 @@ struct EditorView: View {
                     Button(preset.title) { openCanvaPreset(preset) }
                 }
                 Divider()
+                Button("Open Canva in browser") {
+                    NSWorkspace.shared.open(URL(string: "https://www.canva.com/")!)
+                }
                 Button("From my Canva…") {
                     if CanvaAuth.shared.isConnected { showCanvaPicker = true } else { showConnectHint = true }
                 }
