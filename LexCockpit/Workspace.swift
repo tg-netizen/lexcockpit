@@ -618,7 +618,10 @@ struct SettingsSheet: View {
     @ObservedObject private var canva = CanvaAuth.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    EmptyView()
             Text(onboarding ? "Welcome to LexCockpit" : "Settings")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundColor(.textPrimary)
@@ -728,6 +731,10 @@ struct SettingsSheet: View {
                 .labelsHidden()
             }
 
+                }
+                .padding(22)
+            }
+            Divider()
             HStack {
                 if saved { Label("Saved to Keychain", systemImage: "checkmark.circle.fill").foregroundColor(.stApplied) }
                 Spacer()
@@ -752,9 +759,11 @@ struct SettingsSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+            .background(Color.bgCard)
         }
-        .padding(22)
-        .frame(width: 560)
+        .frame(width: 560, height: 640)
     }
 
     private func testRow(_ id: String, _ label: String,
