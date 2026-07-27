@@ -5,12 +5,13 @@ import UniformTypeIdentifiers
 // MARK: - Tabs
 
 enum WorkspaceTab: String, CaseIterable, Identifiable {
-    case overview, content, cms, deploys, repo
+    case overview, content, planner, cms, deploys, repo
     var id: String { rawValue }
     var title: String {
         switch self {
         case .overview: return "Overview"
         case .content:  return "Content"
+        case .planner:  return "Calendar"
         case .cms:      return "CMS"
         case .deploys:  return "Deploys"
         case .repo:     return "Repo"
@@ -20,6 +21,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
         switch self {
         case .overview: return "square.grid.2x2"
         case .content:  return "doc.text"
+        case .planner:  return "calendar"
         case .cms:      return "globe"
         case .deploys:  return "arrow.up.circle"
         case .repo:     return "chevron.left.forwardslash.chevron.right"
@@ -219,6 +221,10 @@ struct WorkspaceView: View {
         switch tab {
         case .overview: OverviewTabView(site: site)
         case .content:  ContentTabView(model: model, openDeploys: { tab = .deploys })
+        case .planner:  CalendarTabView(model: model, openArticle: { entry in
+                            tab = .content
+                            Task { await model.openEntry(entry) }
+                        })
         case .cms:      CMSTabView(site: site)
         case .deploys:  DeploysTabView(model: model)
         case .repo:     RepoTabView(model: model)

@@ -11,6 +11,7 @@ struct ContentEntry: Identifiable, Hashable {
     let status: String          // draft / scheduled / published / —
     var preview: String = ""    // first body line (library row)
     var words: Int = 0
+    var scheduled: String = ""  // scheduled_publish_at, if any
     var id: String { path }
 
     var isDraft: Bool { status == "draft" }
@@ -331,12 +332,13 @@ struct ContentCacheEntry: Codable {
     let sha: String, title: String, date: String, status: String
     var preview: String? = nil
     var words: Int? = nil
+    var scheduled: String? = nil
 }
 
 extension WorkspaceModel {
     private var contentCacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("LexCockpit/content-cache2-\(site.id).json")
+            .appendingPathComponent("LexCockpit/content-cache3-\(site.id).json")
     }
     private func loadContentCache() -> [String: ContentCacheEntry] {
         (try? JSONDecoder().decode([String: ContentCacheEntry].self,
@@ -396,7 +398,8 @@ extension WorkspaceModel {
                             date: doc.scalar("date") ?? String((blob.path as NSString).lastPathComponent.prefix(10)),
                             status: status,
                             preview: preview.map { String($0.prefix(110)) },
-                            words: words))
+                            words: words,
+                            scheduled: doc.scalar("scheduled_publish_at") ?? ""))
                     }
                 }
                 for try await result in group {
@@ -408,7 +411,8 @@ extension WorkspaceModel {
             entries = fresh.map { path, e in
                 ContentEntry(path: path, name: (path as NSString).lastPathComponent,
                              title: e.title, date: e.date, status: e.status,
-                             preview: e.preview ?? "", words: e.words ?? 0)
+                             preview: e.preview ?? "", words: e.words ?? 0,
+                             scheduled: e.scheduled ?? "")
             }
             contentEntries = entries.sorted { $0.date > $1.date }
         } catch {
