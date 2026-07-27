@@ -154,31 +154,22 @@ struct WorkspaceView: View {
         .navigationTitle(site.name)
     }
 
+    // Slim bar: the window title already carries the project name (V6) —
+    // here only the tabs and the live status live.
     private var topBar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(site.name)
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.textPrimary)
-                    if let urlStr = site.url, let url = URL(string: urlStr) {
-                        Link(urlStr.replacingOccurrences(of: "https://", with: ""), destination: url)
-                            .font(.caption)
-                    }
-                }
-                Spacer()
-                statusPill
+        HStack(spacing: 6) {
+            ForEach(WorkspaceTab.allCases) { t in
+                tabChip(t)
             }
-            HStack(spacing: 6) {
-                ForEach(WorkspaceTab.allCases) { t in
-                    tabChip(t)
-                }
-                Spacer()
+            Spacer()
+            if let urlStr = site.url, let url = URL(string: urlStr) {
+                Link(urlStr.replacingOccurrences(of: "https://", with: ""), destination: url)
+                    .font(.caption).foregroundColor(.textSecondary)
             }
+            statusPill
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
         .background(Color.bgCard)
     }
 

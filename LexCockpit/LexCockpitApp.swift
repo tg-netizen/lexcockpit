@@ -434,7 +434,8 @@ struct ContentView: View {
                     .font(.caption2).foregroundColor(.textSecondary)
                     .padding(.horizontal, 14).padding(.bottom, 8)
             }
-            .padding(.vertical, 10)
+            .padding(.top, 36)          // clear of the traffic lights (hidden title bar)
+            .padding(.bottom, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color.bgCard)
@@ -494,7 +495,13 @@ struct ContentView: View {
 
     @ViewBuilder private var detailView: some View {
         switch selection ?? .section(.dashboard) {
-        case .section(.dashboard):   ProjectHubView(navigate: { selection = $0 })
+        case .section(.dashboard):   ProjectHubView(navigate: { target in
+            selection = target
+            if case .site(let id) = target {
+                SessionHub.shared.state.selectionSite = id
+                SessionHub.shared.state.selectionSection = nil
+            }
+        })
         case .section(.radar):       RadarView()
         case .section(.analytics):   AnalyticsView()
         case .section(.tracker):     TrackerView()

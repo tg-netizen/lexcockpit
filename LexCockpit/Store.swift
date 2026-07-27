@@ -72,8 +72,20 @@ final class CockpitStore: ObservableObject {
 
     func addUserSite(_ site: SiteProject) {
         var user = UserProjects.load()
-        user.removeAll { $0.id == site.id }
-        user.append(site)
+        // Base config wins on id clashes — suffix instead of silently vanishing.
+        var newSite = site
+        if baseSites.contains(where: { $0.id == site.id }) {
+            var n = 2
+            while baseSites.contains(where: { $0.id == "\(site.id)-\(n)" })
+                || user.contains(where: { $0.id == "\(site.id)-\(n)" }) { n += 1 }
+            newSite = SiteProject(id: "\(site.id)-\(n)", name: site.name, url: site.url,
+                                  cms_url: site.cms_url, repo: site.repo,
+                                  default_branch: site.default_branch,
+                                  netlify_site_id: site.netlify_site_id,
+                                  content_paths: site.content_paths)
+        }
+        user.removeAll { $0.id == newSite.id }
+        user.append(newSite)
         UserProjects.save(user)
         refreshSites()
     }
