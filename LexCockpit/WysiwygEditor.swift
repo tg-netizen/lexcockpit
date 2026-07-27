@@ -70,6 +70,11 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
 
     func insert(markdown: String) { call("insertMarkdown", markdown) }
 
+    func setTypewriter(_ on: Bool) {
+        webView.evaluateJavaScript("window.__setTypewriter && window.__setTypewriter(\(on));",
+                                   completionHandler: nil)
+    }
+
     /// Push the block palette into the shell for the slash menu.
     func installBlocks(json: String) {
         webView.evaluateJavaScript("window.__blocks = \(json); undefined;", completionHandler: nil)
@@ -156,6 +161,9 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         font-family: 'Inter', sans-serif; font-size: 13px; min-width: 190px; }
       #slashmenu div { padding: 7px 12px; cursor: pointer; }
       #slashmenu div.sel { background: #EDF1F7; color: #1F3A5F; }
+      body.typewriter .toastui-editor-contents { padding-bottom: 55vh; padding-top: 20vh; }
+      body.typewriter .toastui-editor-contents > * { opacity: 0.35; transition: opacity 0.25s ease; }
+      body.typewriter .toastui-editor-contents > .tw-active { opacity: 1; }
       .toastui-editor-md-container .toastui-editor md-preview { display: none; }
     </style>
     <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
@@ -274,6 +282,46 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
       }, true);
       document.addEventListener('mousedown', function (ev) {
         if (!menu.contains(ev.target)) hideMenu();
+      });
+
+      // ── Typewriter mode (focus): centered caret + paragraph spotlight ──
+      var twOn = false;
+      var twTimer = null;
+      window.__setTypewriter = function (on) {
+        twOn = !!on;
+        document.body.classList.toggle('typewriter', twOn);
+        if (!twOn) {
+          var act = document.querySelector('.tw-active');
+          if (act) act.classList.remove('tw-active');
+        } else { twTick(); }
+      };
+      function twTick() {
+        if (!twOn) return;
+        var sel = window.getSelection();
+        if (!sel || !sel.anchorNode) return;
+        var node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+        var root = document.querySelector('.toastui-editor-contents');
+        if (!node || !root) return;
+        while (node && node.parentElement !== root) node = node.parentElement;
+        if (node) {
+          var prev = document.querySelector('.tw-active');
+          if (prev && prev !== node) prev.classList.remove('tw-active');
+          node.classList.add('tw-active');
+        }
+        try {
+          var rect = sel.getRangeAt(0).getBoundingClientRect();
+          if (rect && rect.top) {
+            var target = window.innerHeight * 0.45;
+            var scroller = document.querySelector('.toastui-editor-ww-container .toastui-editor') || document.scrollingElement;
+            var delta = rect.top - target;
+            if (Math.abs(delta) > 14) scroller.scrollBy({ top: delta, behavior: 'smooth' });
+          }
+        } catch (e) {}
+      }
+      document.addEventListener('selectionchange', function () {
+        if (!twOn) return;
+        if (twTimer) clearTimeout(twTimer);
+        twTimer = setTimeout(twTick, 90);
       });
 
       // ── Image context menu → Swift ─────────────────────────────

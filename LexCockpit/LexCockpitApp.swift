@@ -61,7 +61,7 @@ struct LexCockpitApp: App {
                 .environmentObject(store)
                 .frame(minWidth: 1000, minHeight: 640)
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}   // no "New Window"
         }
@@ -251,6 +251,14 @@ struct ContentView: View {
                     .keyboardShortcut("r", modifiers: .command)
                     .help("Refresh feeds (⌘R)")
                     .disabled(store.isLoading)
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showSwitcher = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .help("Jump to anything (⌘K)")
                 }
                 ToolbarItem(placement: .automatic) {
                     Button {

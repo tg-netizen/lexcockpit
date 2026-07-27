@@ -149,6 +149,7 @@ struct WorkspaceView: View {
         .animation(.easeInOut(duration: 0.15), value: tab)
         .animation(.easeInOut(duration: 0.15), value: chrome.focus)
         .background(Color.brandCream)
+        .navigationTitle(site.name)
     }
 
     private var topBar: some View {

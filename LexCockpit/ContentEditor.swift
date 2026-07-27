@@ -193,6 +193,12 @@ final class EditorDocument: ObservableObject, Identifiable {
         dirty = serialized() != fmDoc.serialize() || isNewFile && lastCommitSHA == nil
     }
 
+    /// Optional writing goal from frontmatter `word_goal` (read-only —
+    /// the form never writes it, unknown-key preservation keeps it intact).
+    var wordGoal: Int? {
+        exposedDoc.scalar("word_goal").flatMap { Int($0) }
+    }
+
     enum PublishState { case draft, scheduled(String), published }
     var publishState: PublishState {
         if !isDraft { return .published }
@@ -692,6 +698,7 @@ struct EditorView: View {
     @State private var dropTargeted = false
     @State private var coverImage: NSImage?
     @State private var showRestore = false
+    @AppStorage("typewriterEnabled") private var typewriterOn = true
     @State private var showPublish = false
     @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
@@ -733,6 +740,12 @@ struct EditorView: View {
             }
         }
         .onAppear { wireBridge() }
+        .onChange(of: chrome.focus) { focused in
+            wysiwyg.setTypewriter(focused && typewriterOn)
+        }
+        .onChange(of: typewriterOn) { on in
+            wysiwyg.setTypewriter(chrome.focus && on)
+        }
         .task(id: doc.heroImagePath) { await loadCoverThumbnail() }
         .onAppear { if doc.restoreOffer != nil { showRestore = true } }
         .alert("File changed on GitHub since you opened it", isPresented: $doc.conflict) {
@@ -764,6 +777,12 @@ struct EditorView: View {
             Text("A locally autosaved version of this article exists (e.g. after a crash). Restore it, or discard and keep the version from GitHub?")
         }
         .onDisappear { external.stop() }
+        .navigationTitle(doc.title.isEmpty ? doc.fileName : doc.title)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                toolbarActions
+            }
+        }
         .sheet(item: $canvaSheet) { ctx in
             CanvaDesignSheet(context: ctx) { data, name in
                 await uploadDropped(data: data, name: name, asCover: ctx.isCover)
@@ -1006,6 +1025,12 @@ struct EditorView: View {
             }
             Spacer()
 
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+    }
+
+    /// All editor actions live in the native window toolbar (V6).
+    @ViewBuilder private var toolbarActions: some View {
             Menu {
                 ForEach(BlockKind.allCases) { block in
                     Button {
@@ -1098,9 +1123,8 @@ struct EditorView: View {
             .tint(.accentNavy)
             .disabled(doc.saving || model.site.repo == nil)
             .popover(isPresented: $showPublish, arrowEdge: .bottom) { publishPopover }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 8)
     }
+
 
     // MARK: Publish flow (Ghost pattern: states + schedule + checklist)
 
@@ -1315,11 +1339,16 @@ struct EditorView: View {
 
     @ViewBuilder private var editorArea: some View {
         if chrome.focus {
-            // Focus mode: just the writing surface, centered at 720 pt.
-            HStack {
-                Spacer(minLength: 0)
-                wysiwygEditor.frame(maxWidth: 720)
-                Spacer(minLength: 0)
+            // Focus mode: just the writing surface, centered at 720 pt,
+            // with a small writing HUD (words · goal ring · typewriter).
+            ZStack(alignment: .bottomTrailing) {
+                HStack {
+                    Spacer(minLength: 0)
+                    wysiwygEditor.frame(maxWidth: 720)
+                    Spacer(minLength: 0)
+                }
+                focusHUD
+                    .padding(14)
             }
             .background(Color.bgCard)
         } else {
@@ -1344,6 +1373,38 @@ struct EditorView: View {
             .onDrop(of: ["public.file-url", "public.image"], isTargeted: .constant(false)) { providers in
                 handleDrop(providers, asCover: false)
             }
+    }
+
+    private var focusHUD: some View {
+        let words = doc.bodyText.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+        let minutes = max(1, Int((Double(words) / 220.0).rounded(.up)))
+        return HStack(spacing: 10) {
+            if let goal = doc.wordGoal, goal > 0 {
+                ZStack {
+                    Circle().stroke(Color.cardBorder, lineWidth: 3)
+                    Circle()
+                        .trim(from: 0, to: min(1, CGFloat(words) / CGFloat(goal)))
+                        .stroke(words >= goal ? Color.statusGreen : Color.brandGold,
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 18, height: 18)
+                .help("\(words) of \(goal) words (frontmatter word_goal)")
+            }
+            Text("\(words) words · \(minutes) min")
+                .font(.system(size: 11)).foregroundColor(.textSecondary)
+            Button {
+                typewriterOn.toggle()
+            } label: {
+                Image(systemName: "text.insert")
+                    .foregroundColor(typewriterOn ? .brandNavy : .textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help(typewriterOn ? "Typewriter scrolling on — caret stays centered" : "Typewriter scrolling off")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Capsule().fill(Color.bgPage.opacity(0.92)))
+        .overlay(Capsule().stroke(Color.cardBorder))
     }
 
     private var footer: some View {
