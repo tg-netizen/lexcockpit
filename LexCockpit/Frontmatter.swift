@@ -364,5 +364,17 @@ func runFrontmatterSelfTests() -> Bool {
     let q = OAuthLoopback.queryItems(fromRequestLine: "GET /callback?code=abc%2F123&state=xyz HTTP/1.1\r\nHost: x")
     expect(q["code"] == "abc/123" && q["state"] == "xyz", "loopback parses code + state")
 
+    // 9. Design-block detection (drives the markdown-mode protection: Toast's
+    //    WYSIWYG strips raw HTML containers, so these must never load into it).
+    expect(WysiwygController.hasDesignBlocks("x\n<div class=\"pull-quote\">q</div>"),
+           "detects pull-quote block")
+    expect(WysiwygController.hasDesignBlocks("<div class=\"callout callout--info\">i</div>"),
+           "detects callout block")
+    expect(WysiwygController.hasDesignBlocks("<div class=\"keyfacts\">f</div>")
+           && WysiwygController.hasDesignBlocks("<figure><img src=\"x\"></figure>"),
+           "detects keyfacts + figure blocks")
+    expect(!WysiwygController.hasDesignBlocks("Plain **markdown** with > quote\n\n---\n\n## h2"),
+           "plain markdown is not flagged as blocks")
+
     return ok
 }

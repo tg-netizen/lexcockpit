@@ -51,6 +51,11 @@ enum RoundtripTest {
                 allIdentical = false
                 continue
             }
+            if WysiwygController.hasDesignBlocks(body) {
+                // The app switches to markdown mode BEFORE loading block
+                // articles — loading into WYSIWYG already destroys the HTML.
+                controller.setMode("markdown")
+            }
             controller.load(markdown: body)
             try? await Task.sleep(nanoseconds: 1_800_000_000)
 

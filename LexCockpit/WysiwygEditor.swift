@@ -47,6 +47,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     var onImageMenu: ((String) -> Void)?
 
     private var pendingLoad: String?
+    private var pendingMode: (mode: String, lock: Bool)?
 
     override init() {
         let cfg = WKWebViewConfiguration()
@@ -69,6 +70,26 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     }
 
     func insert(markdown: String) { call("insertMarkdown", markdown) }
+
+    /// Detects site design blocks whose raw HTML Toast's WYSIWYG mode
+    /// does NOT round-trip (it strips the container divs). Such articles
+    /// must be edited in markdown mode, which is byte-faithful.
+    static func hasDesignBlocks(_ md: String) -> Bool {
+        md.range(of: #"<div class="(pull-quote|callout|keyfacts)"#,
+                 options: .regularExpression) != nil
+            || md.contains("<figure")
+    }
+
+    /// Must take effect BEFORE the markdown is loaded: setMarkdown while the
+    /// WYSIWYG mode is active already normalizes HTML blocks away.
+    func setMode(_ mode: String, lock: Bool = false) {
+        guard ready else { pendingMode = (mode, lock); return }
+        var js = "window.__editor && window.__editor.changeMode('\(mode)', true);"
+        if lock {
+            js += " var __ms = document.querySelector('.toastui-editor-mode-switch'); if (__ms) __ms.style.display = 'none';"
+        }
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
 
     func setTypewriter(_ on: Bool) {
         webView.evaluateJavaScript("window.__setTypewriter && window.__setTypewriter(\(on));",
@@ -111,6 +132,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         switch type {
         case "ready":
             ready = true
+            if let pm = pendingMode { pendingMode = nil; setMode(pm.mode, lock: pm.lock) }
             if let pending = pendingLoad { pendingLoad = nil; call("loadMarkdown", pending) }
         case "change":
             if let md = body["md"] as? String { onChange?(md) }

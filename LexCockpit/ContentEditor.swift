@@ -718,6 +718,7 @@ struct EditorView: View {
     @State private var showRestore = false
     @AppStorage("typewriterEnabled") private var typewriterOn = true
     @State private var showHistory = false
+    @State private var blockProtection = false
     @State private var showPublish = false
     @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
@@ -732,6 +733,20 @@ struct EditorView: View {
             Divider()
             if !chrome.focus {
                 frontmatterForm
+                Divider()
+            }
+            if blockProtection {
+                HStack(spacing: 8) {
+                    Image(systemName: "shield.lefthalf.filled").font(.caption)
+                        .foregroundColor(.accentNavy)
+                    Text("Design blocks detected — opened in Markdown mode to protect them. The preview on the right shows the rendered result; switching to WYSIWYG would strip the block markup.")
+                        .font(.caption).foregroundColor(.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Got it") { blockProtection = false }.controlSize(.small)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .background(Color.navyTint)
                 Divider()
             }
             if let name = external.activeEditorName {
@@ -937,6 +952,10 @@ struct EditorView: View {
             if let match = doc.canvaDesigns.first(where: { $0.path == src }) {
                 pendingCanvaEdit = match.id
             }
+        }
+        if WysiwygController.hasDesignBlocks(doc.bodyText) {
+            wysiwyg.setMode("markdown", lock: true)
+            blockProtection = true
         }
         wysiwyg.load(markdown: doc.bodyText)
         wysiwyg.installBlocks(json: BlockKind.jsPayload)
