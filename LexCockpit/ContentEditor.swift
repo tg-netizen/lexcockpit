@@ -9,6 +9,8 @@ struct ContentEntry: Identifiable, Hashable {
     let title: String
     let date: String
     let status: String          // draft / scheduled / published / —
+    var preview: String = ""    // first body line (library row)
+    var words: Int = 0
     var id: String { path }
 
     var isDraft: Bool { status == "draft" }
@@ -321,12 +323,14 @@ final class EditorDocument: ObservableObject, Identifiable {
 
 struct ContentCacheEntry: Codable {
     let sha: String, title: String, date: String, status: String
+    var preview: String? = nil
+    var words: Int? = nil
 }
 
 extension WorkspaceModel {
     private var contentCacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("LexCockpit/content-cache-\(site.id).json")
+            .appendingPathComponent("LexCockpit/content-cache2-\(site.id).json")
     }
     private func loadContentCache() -> [String: ContentCacheEntry] {
         (try? JSONDecoder().decode([String: ContentCacheEntry].self,
@@ -374,11 +378,19 @@ extension WorkspaceModel {
                         else if doc.scalar("status") == "scheduled" { status = "scheduled" }
                         else if let s = doc.scalar("status") { status = s }
                         else { status = "—" }
+                        let body = doc.body
+                        let preview = body.components(separatedBy: "\n")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .first { !$0.isEmpty && !$0.hasPrefix("<") }?
+                            .trimmingCharacters(in: CharacterSet(charactersIn: "#>*-! "))
+                        let words = body.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
                         return (blob.path, ContentCacheEntry(
                             sha: blob.sha,
                             title: doc.scalar("title") ?? (blob.path as NSString).lastPathComponent,
                             date: doc.scalar("date") ?? String((blob.path as NSString).lastPathComponent.prefix(10)),
-                            status: status))
+                            status: status,
+                            preview: preview.map { String($0.prefix(110)) },
+                            words: words))
                     }
                 }
                 for try await result in group {
@@ -389,7 +401,8 @@ extension WorkspaceModel {
             saveContentCache(cache)
             entries = fresh.map { path, e in
                 ContentEntry(path: path, name: (path as NSString).lastPathComponent,
-                             title: e.title, date: e.date, status: e.status)
+                             title: e.title, date: e.date, status: e.status,
+                             preview: e.preview ?? "", words: e.words ?? 0)
             }
             contentEntries = entries.sorted { $0.date > $1.date }
         } catch {
@@ -463,92 +476,159 @@ struct ContentTabView: View {
     @ObservedObject var model: WorkspaceModel
     var openDeploys: () -> Void
 
+    @EnvironmentObject var chrome: ChromeModel
+    @AppStorage("contentListVisible") private var listVisible = true
+
     var body: some View {
-        if let doc = model.editor {
-            EditorView(model: model, doc: doc, openDeploys: openDeploys)
-                .id(doc.id)                      // fresh editor (and webview) per document
-        } else {
-            ContentBrowserView(model: model)
+        HSplitView {
+            if listVisible && !chrome.focus {
+                ContentLibraryView(model: model)
+                    .frame(minWidth: 250, idealWidth: 310, maxWidth: 400)
+            }
+            Group {
+                if let doc = model.editor {
+                    EditorView(model: model, doc: doc, openDeploys: openDeploys)
+                        .id(doc.id)              // fresh editor (and webview) per document
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 34)).foregroundColor(.textSecondary)
+                        Text("Select an article").font(.headline).foregroundColor(.textPrimary)
+                        Text("Pick one from the library — or create a new draft with the + button.")
+                            .font(.callout).foregroundColor(.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.bgPage)
+                }
+            }
+            .frame(minWidth: 460, maxWidth: .infinity)
         }
+        .background(
+            Button("") { withAnimation(.easeInOut(duration: 0.15)) { listVisible.toggle() } }
+                .keyboardShortcut("0", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        )
     }
 }
 
-struct ContentBrowserView: View {
+struct ContentLibraryView: View {
     @ObservedObject var model: WorkspaceModel
     @Environment(\.openWindow) private var openWindow
     @State private var search = ""
     @State private var showNewSheet = false
+    @State private var pendingOpen: ContentEntry?
 
     private var filtered: [ContentEntry] {
         guard !search.isEmpty else { return model.contentEntries }
         let q = search.lowercased()
         return model.contentEntries.filter {
             $0.title.lowercased().contains(q) || $0.name.lowercased().contains(q)
+                || $0.preview.lowercased().contains(q)
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundColor(.textSecondary)
-                TextField("Search by title or filename…", text: $search)
-                    .textFieldStyle(.plain)
-                if model.contentLoading { ProgressView().controlSize(.small) }
-                Spacer()
+                TextField("Search…", text: $search).textFieldStyle(.plain)
+                if model.contentLoading { ProgressView().controlSize(.mini) }
                 Button { Task { await model.loadContentList() } } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Refresh list")
-                Button { showNewSheet = true } label: { Label("New article", systemImage: "plus") }
+                    .buttonStyle(.plain).foregroundColor(.textSecondary).help("Refresh list")
+                Button { showNewSheet = true } label: { Image(systemName: "plus") }
+                    .buttonStyle(.plain).foregroundColor(.accentNavy).help("New article")
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
+            .padding(.horizontal, 12).padding(.vertical, 9)
             Divider()
 
             if let err = model.contentError {
                 VStack {
-                    Label(err, systemImage: "exclamationmark.triangle").foregroundColor(.stBlocked)
-                        .padding(.top, 30)
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .foregroundColor(.stBlocked).font(.caption).padding(.top, 24)
+                        .padding(.horizontal, 10)
                     Spacer()
                 }
             } else if model.contentEntries.isEmpty && !model.contentLoading {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     Spacer()
-                    Image(systemName: "doc.text").font(.largeTitle).foregroundColor(.textSecondary)
-                    Text("No articles loaded yet").font(.headline)
-                    Text("Content is listed from the repo's content_paths via the GitHub API.")
-                        .font(.callout).foregroundColor(.textSecondary)
+                    Text("No articles yet").font(.callout).foregroundColor(.textSecondary)
                     Spacer()
                 }
-                .frame(maxWidth: .infinity)
             } else {
-                List(filtered) { entry in
-                    Button { Task { await model.openEntry(entry) } } label: {
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.title).fontWeight(.medium).lineLimit(1)
-                                Text(entry.name)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.textSecondary).lineLimit(1)
-                            }
-                            Spacer()
-                            Text(prettyDate(entry.date)).font(.caption).foregroundColor(.textSecondary)
-                            if entry.isDraft { Pill(text: "Draft", color: .brandNavy) }
-                            else if entry.status == "scheduled" { Pill(text: "Scheduled", color: .stUpcoming) }
-                            else if entry.status == "published" { Pill(text: "Published", color: .stApplied) }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 2)
-                    .contextMenu {
-                        Button("Open in New Window") {
-                            openWindow(id: "article", value: ArticleRef(site: model.site, path: entry.path))
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(filtered) { entry in
+                            libraryRow(entry)
                         }
                     }
+                    .padding(6)
                 }
-                .listStyle(.inset)
             }
         }
+        .background(Color.bgCard)
         .task { if model.contentEntries.isEmpty { await model.loadContentList() } }
         .sheet(isPresented: $showNewSheet) { NewArticleSheet(model: model) }
+        .confirmationDialog("Discard unsaved changes?",
+                            isPresented: Binding(get: { pendingOpen != nil },
+                                                 set: { if !$0 { pendingOpen = nil } })) {
+            Button("Switch article", role: .destructive) {
+                if let entry = pendingOpen { Task { await model.openEntry(entry) } }
+                pendingOpen = nil
+            }
+            Button("Keep editing", role: .cancel) { pendingOpen = nil }
+        } message: {
+            Text("Autosave keeps a local draft of your unsaved changes — you can restore it when you come back.")
+        }
+    }
+
+    private func statusColor(_ entry: ContentEntry) -> Color {
+        if entry.isDraft { return .accentNavy }
+        if entry.status == "scheduled" { return .statusAmber }
+        if entry.status == "published" { return .statusGreen }
+        return .cardBorder
+    }
+
+    private func libraryRow(_ entry: ContentEntry) -> some View {
+        let active = model.editor?.repoPath == entry.path
+        return Button {
+            guard !active else { return }
+            if model.editorDirty { pendingOpen = entry }
+            else { Task { await model.openEntry(entry) } }
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Circle().fill(statusColor(entry))
+                    .frame(width: 8, height: 8).padding(.top, 5)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(active ? .accentNavy : .textPrimary)
+                        .lineLimit(1)
+                    if !entry.preview.isEmpty {
+                        Text(entry.preview)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(.textSecondary)
+                            .lineLimit(2)
+                    }
+                    HStack(spacing: 6) {
+                        Text(prettyDate(entry.date))
+                        if entry.words > 0 { Text("· \(entry.words) words") }
+                    }
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.textSecondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 7)
+                .fill(active ? Color.navyTint : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Open in New Window") {
+                openWindow(id: "article", value: ArticleRef(site: model.site, path: entry.path))
+            }
+        }
     }
 }
 
@@ -607,7 +687,7 @@ struct EditorView: View {
     @StateObject private var preview = PreviewController()
     @StateObject private var external = ExternalEditSession()
     @State private var mode: EditorMode = .split
-    @State private var confirmClose = false
+    @AppStorage("contentListVisible") private var listVisible = true
     @State private var showQuality = false
     @State private var dropTargeted = false
     @State private var coverImage: NSImage?
@@ -683,10 +763,7 @@ struct EditorView: View {
         } message: {
             Text("A locally autosaved version of this article exists (e.g. after a crash). Restore it, or discard and keep the version from GitHub?")
         }
-        .confirmationDialog("Discard unsaved changes?", isPresented: $confirmClose) {
-            Button("Discard changes", role: .destructive) { external.stop(); model.closeEditor() }
-            Button("Keep editing", role: .cancel) {}
-        }
+        .onDisappear { external.stop() }
         .sheet(item: $canvaSheet) { ctx in
             CanvaDesignSheet(context: ctx) { data, name in
                 await uploadDropped(data: data, name: name, asCover: ctx.isCover)
@@ -912,9 +989,12 @@ struct EditorView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Button {
-                if doc.dirty { confirmClose = true } else { external.stop(); model.closeEditor() }
-            } label: { Image(systemName: "chevron.left") }
-            .help("Back to the article list")
+                withAnimation(.easeInOut(duration: 0.15)) { listVisible.toggle() }
+            } label: { Image(systemName: "sidebar.left") }
+            .buttonStyle(.plain)
+            .foregroundColor(listVisible ? .brandNavy : .textSecondary)
+            .keyboardShortcut("0", modifiers: .command)
+            .help("Show/hide the article library (⌘0)")
 
             Text(doc.fileName)
                 .font(.system(.callout, design: .monospaced))
