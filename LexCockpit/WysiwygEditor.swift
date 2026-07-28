@@ -269,6 +269,11 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         border-radius: 8px; padding: 0.7rem 1rem; margin: 1.2rem 0; }
       .toastui-editor-contents figcaption { font-size: 0.85em; color: #6B7280;
         font-family: 'Inter', sans-serif; margin-top: 4px; }
+      .toastui-editor-contents .draft-note, .bprev .inner .draft-note {
+        border: 1.5px dashed #B9C2CF; background: #F7F8FA; border-radius: 8px;
+        padding: 0.55rem 1rem; margin: 1.1rem 0; color: #5B6472;
+        font-family: 'Inter', sans-serif; font-size: 0.86em; }
+      .toastui-editor-contents .draft-note strong { color: #1F3A5F; }
       .toastui-editor-mode-switch { display: none !important; }
       .toastui-editor-ww-container [data-vault]:hover { outline: 2px solid #C5D4E8;
         outline-offset: 3px; border-radius: 3px; cursor: default; }

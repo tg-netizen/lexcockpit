@@ -305,40 +305,107 @@ enum ArticleTemplate: String, CaseIterable, Identifiable {
         case .blank:
             return ""
         case .deepDive:
+            // Feature dramaturgy (researched: lede → nut graf → thesis/
+            // antithesis/synthesis → kicker). Schema notes guide each
+            // section and are stripped automatically on publish.
             return """
-            Open with the scene — a concrete place, person or moment that makes the reader feel the question.
-
-            ## The backstory
-
-            How did we get here? Two or three paragraphs of history the reader needs.
-
-            <div class="pull-quote">One sentence worth lifting out.</div>
-
-            ## What the rules actually say
-
-            The substance — precise, sourced, readable.
-
-            <div class="keyfacts">
-            <p><strong>Key facts</strong></p>
+            <div class="draft-note">
+            <p><strong>✎ Schema — Lede (the opening)</strong></p>
             <ul>
-            <li>Fact one</li>
-            <li>Fact two</li>
-            <li>Fact three</li>
+            <li>Open with ONE concrete scene, person or moment — no abstractions</li>
+            <li>3–5 sentences; the reader should FEEL the question before you name it</li>
+            <li>Good types: scene, anecdote, striking contrast, surprising number</li>
             </ul>
             </div>
 
+            Write the opening scene here.
+
+            <div class="draft-note">
+            <p><strong>✎ Schema — Nut graf (why this, why now)</strong></p>
+            <ul>
+            <li>ONE paragraph: what this story is about, why it matters, why today</li>
+            <li>Name the stakes and who is affected — this is the article's anchor</li>
+            </ul>
+            </div>
+
+            State the nut graf here.
+
+            ## The backstory
+
+            <div class="draft-note">
+            <p><strong>✎ Schema — Context</strong></p>
+            <ul>
+            <li>How did we get here? 2–3 paragraphs of history the reader needs</li>
+            <li>Every claim gets a number, a date or a source</li>
+            </ul>
+            </div>
+
+            Write the context here.
+
+            ## The case
+
+            <div class="draft-note">
+            <p><strong>✎ Schema — Thesis</strong></p>
+            <ul>
+            <li>The strongest version of the main argument, with evidence</li>
+            <li>Add a voice: one real quote (blockquote with attribution)</li>
+            <li>Lift the single best sentence into a pull-quote (+ → Pull quote)</li>
+            </ul>
+            </div>
+
+            Argue the case here.
+
+            ## The counter
+
+            <div class="draft-note">
+            <p><strong>✎ Schema — Antithesis</strong></p>
+            <ul>
+            <li>Take the opposing view seriously: who disagrees, and why</li>
+            <li>Steelman it — the piece gets stronger, not weaker</li>
+            <li>📷 Good spot for a figure or data graphic (+ → Figure)</li>
+            </ul>
+            </div>
+
+            Present the counter-arguments here.
+
             ## What it means
 
-            Your analysis — the "so what" for the reader.
+            <div class="draft-note">
+            <p><strong>✎ Schema — Synthesis</strong></p>
+            <ul>
+            <li>Your analysis: what follows from thesis vs. antithesis</li>
+            <li>Move from the personal to the universal and back</li>
+            <li>Summarise the hard numbers in a Key-facts box (+ → Key facts)</li>
+            </ul>
+            </div>
+
+            Write the synthesis here.
 
             ---
 
             ## The takeaway
 
-            Close the loop with the opening scene.
+            <div class="draft-note">
+            <p><strong>✎ Schema — Kicker (the ending)</strong></p>
+            <ul>
+            <li>Circle back to the opening scene, OR end on a strong quote, OR leave one sharp question</li>
+            <li>No new facts here — the last sentence should echo</li>
+            </ul>
+            </div>
+
+            Write the kicker here.
             """
         case .newsBrief:
+            // Inverted pyramid: most important first, context after, outlook last.
             return """
+            <div class="draft-note">
+            <p><strong>✎ Schema — Lead (inverted pyramid)</strong></p>
+            <ul>
+            <li>First 2 sentences answer: who, what, when, where, why</li>
+            <li>No warm-up — the most important fact comes first</li>
+            </ul>
+            </div>
+
             **What happened:** one paragraph, just the facts.
 
             **Why it matters:** one paragraph — who is affected and how.
@@ -348,10 +415,26 @@ enum ArticleTemplate: String, CaseIterable, Identifiable {
             </div>
 
             **What's next:** dates, deadlines, the thing to watch.
+
+            <div class="draft-note">
+            <p><strong>✎ Schema — Check before publishing</strong></p>
+            <ul>
+            <li>Can the reader act on this in under 2 minutes of reading?</li>
+            <li>Is every date and number sourced?</li>
+            </ul>
+            </div>
             """
         case .trackerUpdate:
             return """
             ## What moved
+
+            <div class="draft-note">
+            <p><strong>✎ Schema</strong></p>
+            <ul>
+            <li>Which regulation changed, when, and in which official source</li>
+            <li>Link the CELEX / Official Journal reference</li>
+            </ul>
+            </div>
 
             Which regulation changed, and when.
 
@@ -360,6 +443,14 @@ enum ArticleTemplate: String, CaseIterable, Identifiable {
             </div>
 
             ## Old → new
+
+            <div class="draft-note">
+            <p><strong>✎ Schema</strong></p>
+            <ul>
+            <li>Quote the old wording, then the new wording — verbatim</li>
+            <li>One sentence per change on what it means in practice</li>
+            </ul>
+            </div>
 
             What the text said before, what it says now.
 
@@ -567,10 +658,29 @@ func runFrontmatterSelfTests() -> Bool {
         expect(loadedDoc.dirty, "applied full text marks the document dirty")
     }
 
+    // 10d. Schema notes: blueprints carry guidance; publish strips it.
+    let blueprint = newArticleTemplate(title: "T", author: "", template: .deepDive)
+    expect(blueprint.contains("class=\"draft-note\"")
+           && blueprint.contains("Nut graf") && blueprint.contains("Kicker"),
+           "deep-dive blueprint carries lede/nut-graf/kicker schema notes")
+    let stripped = BlockVault.stripSchemaNotes(from: FrontmatterDoc.parse(blueprint).body)
+    expect(!stripped.contains("draft-note") && stripped.contains("## The takeaway")
+           && stripped.contains("Write the kicker here."),
+           "stripSchemaNotes removes every note and keeps the content")
+    MainActor.assumeIsolated {
+        let d = EditorDocument(repoPath: "content/articles/2026-01-01-y.md",
+                               text: newArticleTemplate(title: "Y", author: "", template: .newsBrief),
+                               sha: nil, isNew: true)
+        d.publishNow()
+        expect(!d.bodyText.contains("draft-note") && d.bodyText.contains("**What happened:**"),
+               "publishNow strips schema notes from the body")
+    }
+
     // 11. Article templates ship structured bodies with design blocks.
     let deep = newArticleTemplate(title: "Test Piece", author: "", template: .deepDive)
-    expect(deep.contains("type: deep-dive") && deep.contains("class=\"keyfacts\"")
-           && deep.contains("## The takeaway"), "deep-dive template structured")
+    expect(deep.contains("type: deep-dive") && deep.contains("## The case")
+           && deep.contains("## The counter") && deep.contains("## The takeaway"),
+           "deep-dive template structured (thesis/antithesis/kicker)")
     let brief = newArticleTemplate(title: "Test Piece", author: "", template: .newsBrief)
     expect(brief.contains("**What happened:**") && brief.contains("callout--info"),
            "news-brief template structured")

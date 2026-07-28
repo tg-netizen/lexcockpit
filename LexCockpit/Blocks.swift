@@ -9,7 +9,7 @@ import AppKit
 /// carries minimal styles and the missing classes are listed in the release
 /// report (site CSS is a separate follow-up; this task never commits there).
 enum BlockKind: String, CaseIterable, Identifiable {
-    case pullquote, calloutInfo, calloutWarn, figure, keyfacts, divider
+    case pullquote, calloutInfo, calloutWarn, figure, keyfacts, divider, schemaNote
     var id: String { rawValue }
 
     var title: String {
@@ -20,6 +20,7 @@ enum BlockKind: String, CaseIterable, Identifiable {
         case .figure:      return "Figure + caption"
         case .keyfacts:    return "Key facts box"
         case .divider:     return "Divider"
+        case .schemaNote:  return "Schema note"
         }
     }
 
@@ -31,6 +32,7 @@ enum BlockKind: String, CaseIterable, Identifiable {
         case .figure:      return "photo.on.rectangle"
         case .keyfacts:    return "list.bullet.rectangle"
         case .divider:     return "minus"
+        case .schemaNote:  return "pencil.line"
         }
     }
 
@@ -52,6 +54,8 @@ enum BlockKind: String, CaseIterable, Identifiable {
             return "\n\n<div class=\"keyfacts\">\n<p><strong>Key facts</strong></p>\n<ul>\n<li>Fact one</li>\n<li>Fact two</li>\n</ul>\n</div>\n\n"
         case .divider:
             return "\n\n---\n\n"
+        case .schemaNote:
+            return "\n\n<div class=\"draft-note\">\n<p><strong>✎ Schema</strong></p>\n<ul>\n<li>What this section should say…</li>\n</ul>\n</div>\n\n"
         }
     }
 
@@ -64,6 +68,7 @@ enum BlockKind: String, CaseIterable, Identifiable {
         case .figure:      return "Pick an image, caption included"
         case .keyfacts:    return "Grey box with a title and bullet facts"
         case .divider:     return "A thin horizontal rule"
+        case .schemaNote:  return "Writing guidance — removed automatically on publish"
         }
     }
 
@@ -82,6 +87,8 @@ enum BlockKind: String, CaseIterable, Identifiable {
             return "<div class=\"keyfacts\"><p><strong>Key facts</strong></p><ul><li>Fact one</li><li>Fact two</li></ul></div>"
         case .divider:
             return "<hr style=\"border:none;border-top:1px solid #D1D5DB;margin:14px 0\">"
+        case .schemaNote:
+            return "<div class=\"draft-note\"><p><strong>✎ Schema</strong></p><ul><li>What to write here…</li></ul></div>"
         }
     }
 
@@ -216,8 +223,23 @@ enum BlockVault {
         return out
     }
 
+    /// Remove every schema note (writing guidance) from a body — called on
+    /// publish/schedule so guidance never reaches the live site.
+    static func stripSchemaNotes(from body: String) -> String {
+        guard let re = try? NSRegularExpression(
+            pattern: #"^<div class=\"draft-note\">[\s\S]*?</div>[ \t]*$"#,
+            options: [.anchorsMatchLines]) else { return body }
+        let ns = body as NSString
+        var out = re.stringByReplacingMatches(in: body, options: [],
+                                              range: NSRange(location: 0, length: ns.length),
+                                              withTemplate: "")
+        while out.contains("\n\n\n") { out = out.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+    }
+
     /// Human label for the edit sheet.
     static func kindLabel(of original: String) -> String {
+        if original.contains("class=\"draft-note\"") { return "Schema note" }
         if original.contains("class=\"pull-quote\"") { return "Pull quote" }
         if original.contains("callout--warn") { return "Callout — warning" }
         if original.contains("class=\"callout") { return "Callout — info" }

@@ -13,9 +13,18 @@ struct ContentEntry: Identifiable, Hashable {
     var preview: String = ""    // first body line (library row)
     var words: Int = 0
     var scheduled: String = ""  // scheduled_publish_at, if any
+    var type: String = ""       // deep-dive / brief / …
+    var topic: String = ""
     var id: String { path }
 
     var isDraft: Bool { status == "draft" }
+
+    /// Live URL: the site publishes at the file stem.
+    func liveURL(site: String?) -> String? {
+        guard status == "published", let base = site, !base.isEmpty else { return nil }
+        let stem = name.hasSuffix(".md") ? String(name.dropLast(3)) : name
+        return base + "/articles/" + stem + ".html"
+    }
 }
 
 // MARK: - Open document
@@ -216,7 +225,12 @@ final class EditorDocument: ObservableObject, Identifiable {
         return .draft
     }
 
-    func publishNow()  { isDraft = false; scheduledAt = ""; recomputeDirty() }
+    func publishNow()  {
+        isDraft = false
+        scheduledAt = ""
+        bodyText = BlockVault.stripSchemaNotes(from: bodyText)
+        recomputeDirty()
+    }
 
     /// Live site URL: the site publishes at the file stem (date-slug),
     /// not the bare slug.
@@ -224,7 +238,14 @@ final class EditorDocument: ObservableObject, Identifiable {
         let stem = fileName.hasSuffix(".md") ? String(fileName.dropLast(3)) : fileName
         return (site ?? "") + "/articles/" + stem + ".html"
     }
-    func schedule(_ date: String) { isDraft = true; scheduledAt = date; recomputeDirty() }
+    func schedule(_ date: String) {
+        isDraft = true
+        scheduledAt = date
+        // The site's daily build flips this live without the app — guidance
+        // must leave the file at scheduling time already.
+        bodyText = BlockVault.stripSchemaNotes(from: bodyText)
+        recomputeDirty()
+    }
     func backToDraft() { isDraft = true; scheduledAt = ""; recomputeDirty() }
 
     func save(repo: String, force: Bool = false, message customMessage: String? = nil) async {
@@ -372,12 +393,14 @@ struct ContentCacheEntry: Codable {
     var preview: String? = nil
     var words: Int? = nil
     var scheduled: String? = nil
+    var type: String? = nil
+    var topic: String? = nil
 }
 
 extension WorkspaceModel {
     private var contentCacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("LexCockpit/content-cache3-\(site.id).json")
+            .appendingPathComponent("LexCockpit/content-cache4-\(site.id).json")
     }
     private func loadContentCache() -> [String: ContentCacheEntry] {
         (try? JSONDecoder().decode([String: ContentCacheEntry].self,
@@ -438,7 +461,9 @@ extension WorkspaceModel {
                             status: status,
                             preview: preview.map { String($0.prefix(110)) },
                             words: words,
-                            scheduled: doc.scalar("scheduled_publish_at") ?? ""))
+                            scheduled: doc.scalar("scheduled_publish_at") ?? "",
+                            type: doc.scalar("type") ?? "",
+                            topic: doc.scalar("topic") ?? ""))
                     }
                 }
                 for try await result in group {
@@ -451,7 +476,8 @@ extension WorkspaceModel {
                 ContentEntry(path: path, name: (path as NSString).lastPathComponent,
                              title: e.title, date: e.date, status: e.status,
                              preview: e.preview ?? "", words: e.words ?? 0,
-                             scheduled: e.scheduled ?? "")
+                             scheduled: e.scheduled ?? "",
+                             type: e.type ?? "", topic: e.topic ?? "")
             }
             contentEntries = entries.sorted { $0.date > $1.date }
         } catch {
@@ -1665,6 +1691,10 @@ struct EditorView: View {
                               && !doc.bodyText.lowercased().contains("todo"),
                           "No placeholder text left")
             }
+            checkLine(ok: !doc.bodyText.contains("class=\"draft-note\""),
+                      doc.bodyText.contains("class=\"draft-note\"")
+                          ? "Schema notes present — removed automatically on publish"
+                          : "No schema notes left")
             Text("Warnings only — you decide.").font(.caption2).foregroundColor(.textSecondary)
 
             Divider()
@@ -2219,7 +2249,7 @@ struct BlockEditSheet: View {
     var onSave: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    private enum Kind { case pullquote, callout, keyfacts, figure, other }
+    private enum Kind { case pullquote, callout, keyfacts, figure, schemaNote, other }
     @State private var kind: Kind = .other
     @State private var text = ""            // pullquote / callout paragraphs / raw fallback
     @State private var warn = false         // callout flavor
@@ -2258,6 +2288,13 @@ struct BlockEditSheet: View {
                 TextEditor(text: $itemsText)
                     .font(.system(size: 13))
                     .frame(height: 130)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
+            case .schemaNote:
+                Text("Guidance for this section (one point per line) — removed automatically on publish:")
+                    .font(.caption).foregroundColor(.textSecondary)
+                TextEditor(text: $itemsText)
+                    .font(.system(size: 13))
+                    .frame(height: 120)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
             case .figure:
                 LabeledContent("Image") {
@@ -2302,6 +2339,9 @@ struct BlockEditSheet: View {
             kind = .keyfacts
             title = Self.matches("<strong>([\\s\\S]*?)</strong>", inner).first ?? "Key facts"
             itemsText = Self.matches("<li>([\\s\\S]*?)</li>", inner).joined(separator: "\n")
+        } else if html.contains("class=\"draft-note\"") {
+            kind = .schemaNote
+            itemsText = Self.matches("<li>([\\s\\S]*?)</li>", html).joined(separator: "\n")
         } else if html.hasPrefix("<figure") {
             kind = .figure
             src = Self.matches("src=\"([^\"]*)\"", html).first ?? ""
@@ -2330,6 +2370,12 @@ struct BlockEditSheet: View {
                 .filter { !$0.isEmpty }
                 .map { "<li>\($0)</li>" }
             return "<div class=\"keyfacts\">\n<p><strong>\(title)</strong></p>\n<ul>\n\(lis.joined(separator: "\n"))\n</ul>\n</div>"
+        case .schemaNote:
+            let lis = itemsText.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .map { "<li>\($0)</li>" }
+            return "<div class=\"draft-note\">\n<p><strong>✎ Schema</strong></p>\n<ul>\n\(lis.joined(separator: "\n"))\n</ul>\n</div>"
         case .figure:
             return "<figure>\n<img src=\"\(src)\" alt=\"\(alt)\">\n<figcaption>\(caption)</figcaption>\n</figure>"
         case .other:

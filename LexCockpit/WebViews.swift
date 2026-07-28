@@ -270,7 +270,10 @@ final class PreviewController: NSObject, ObservableObject, WKNavigationDelegate 
       .cockpit-preview .keyfacts { border: 1px solid #E5E7EB; background: #FAFAF8;
         border-radius: 8px; padding: 0.8rem 1.1rem; margin: 1.5rem 0; }
       .cockpit-preview figure { margin: 1.75rem 0; }
-      .cockpit-preview figcaption { font-family: 'Inter', sans-serif; font-size: 0.8rem;
+      .cockpit-preview .draft-note { border: 1.5px dashed #B9C2CF; background: #F7F8FA; border-radius: 8px;
+        padding: 0.55rem 1rem; margin: 1.1rem 0; color: #5B6472;
+        font-family: 'Inter', sans-serif; font-size: 0.86em; }
+      figcaption { font-family: 'Inter', sans-serif; font-size: 0.8rem;
         color: #6B7280; margin-top: 6px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
