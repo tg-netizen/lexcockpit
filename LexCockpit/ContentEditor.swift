@@ -771,6 +771,10 @@ struct EditorView: View {
     @State private var blockEdit: BlockEditContext?
     @State private var showMedia = false
     @State private var showSource = false
+    @State private var showDetails = false
+    @State private var showLinkPopover = false
+    @State private var linkURL = ""
+
     @State private var showPublish = false
     @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
@@ -783,10 +787,7 @@ struct EditorView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if !chrome.focus {
-                frontmatterForm
-                Divider()
-            }
+
             if let name = external.activeEditorName {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath").font(.caption)
@@ -885,6 +886,21 @@ struct EditorView: View {
             }
         }
         .onChange(of: mode) { m in SessionHub.shared.state.editorMode = m.rawValue }
+        .onChange(of: doc.title) { t in wysiwyg.setDocTitle(t) }
+        .sheet(isPresented: $showDetails) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Article details")
+                        .font(.system(size: 15, weight: .bold)).foregroundColor(.textPrimary)
+                    Spacer()
+                    Button("Done") { showDetails = false }.keyboardShortcut(.defaultAction)
+                }
+                .padding(14)
+                Divider()
+                ScrollView { frontmatterForm.padding(14) }
+            }
+            .frame(width: 640, height: 420)
+        }
         .alert("Edit this graphic in Canva?", isPresented: Binding(
             get: { pendingCanvaEdit != nil }, set: { if !$0 { pendingCanvaEdit = nil } })) {
             Button("Edit in Canva") {
@@ -1087,6 +1103,13 @@ struct EditorView: View {
             }
         }
         wysiwyg.onImagePick = { figurePickFlow() }
+        wysiwyg.onTitle = { t in
+            if doc.title != t {
+                doc.title = t
+                doc.recomputeDirty()
+            }
+        }
+        wysiwyg.setDocTitle(doc.title)
         wysiwyg.load(markdown: peeled.display)
         wysiwyg.installBlocks(json: BlockKind.jsPayload)
         preview.renderNow(doc.bodyText)
@@ -1291,6 +1314,15 @@ struct EditorView: View {
 
     /// All editor actions live in the native window toolbar (V6).
     @ViewBuilder private var toolbarActions: some View {
+            Button {
+                showDetails = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Article details — date, tags, description, author")
+
             Button {
                 showHistory = true
             } label: {
@@ -1679,10 +1711,109 @@ struct EditorView: View {
     /// The Toast UI WYSIWYG surface (markdown power-mode via its built-in
     /// mode switch). Accepts image drops from Finder / Canva exports.
     private var wysiwygEditor: some View {
-        WebViewRepresentable(webView: wysiwyg.webView)
-            .onDrop(of: ["public.file-url", "public.image"], isTargeted: .constant(false)) { providers in
-                handleDrop(providers, asCover: false)
+        ZStack(alignment: .top) {
+            WebViewRepresentable(webView: wysiwyg.webView)
+                .onDrop(of: ["public.file-url", "public.image"], isTargeted: .constant(false)) { providers in
+                    handleDrop(providers, asCover: false)
+                }
+            formatBar
+                .padding(.top, 10)
+        }
+    }
+
+    /// Canva-style persistent format bar floating over the canvas.
+    private var formatBar: some View {
+        HStack(spacing: 2) {
+            Menu {
+                Button("Heading 2") { wysiwyg.exec("heading", payload: ["level": 2]) }
+                Button("Heading 3") { wysiwyg.exec("heading", payload: ["level": 3]) }
+            } label: {
+                Text("Aa").font(.system(size: 13, weight: .semibold))
             }
+            .menuStyle(.borderlessButton)
+            .frame(width: 40)
+            .help("Paragraph style")
+
+            barDivider
+            barButton("B", weight: .bold, help: "Bold") { wysiwyg.exec("bold") }
+            barButton("I", italic: true, help: "Italic") { wysiwyg.exec("italic") }
+            barIconButton("link", help: "Insert link") { showLinkPopover = true }
+                .popover(isPresented: $showLinkPopover, arrowEdge: .bottom) {
+                    HStack(spacing: 8) {
+                        TextField("https://…", text: $linkURL)
+                            .textFieldStyle(.roundedBorder).frame(width: 260)
+                            .onSubmit { insertLinkFromBar() }
+                        Button("Add") { insertLinkFromBar() }
+                    }
+                    .padding(10)
+                }
+            barDivider
+            barIconButton("quote.opening", help: "Blockquote") { wysiwyg.exec("blockQuote") }
+            barIconButton("list.bullet", help: "Bullet list") { wysiwyg.exec("bulletList") }
+            barIconButton("list.number", help: "Numbered list") { wysiwyg.exec("orderedList") }
+            barDivider
+            Button {
+                wysiwyg.openGallery()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus.circle.fill")
+                    Text("Block").font(.system(size: 12.5, weight: .semibold))
+                }
+                .foregroundColor(.accentNavy)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 7)
+            .help("Insert a design block")
+            barIconButton("photo", help: "Media panel") {
+                withAnimation(.easeInOut(duration: 0.15)) { showMedia.toggle() }
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.bgCard)
+                .shadow(color: .black.opacity(0.14), radius: 9, y: 3)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.cardBorder))
+    }
+
+    private var barDivider: some View {
+        Rectangle().fill(Color.cardBorder).frame(width: 1, height: 16).padding(.horizontal, 4)
+    }
+
+    private func barButton(_ label: String, weight: Font.Weight = .regular,
+                           italic: Bool = false, help: String,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: weight))
+                .italic(italic)
+                .foregroundColor(.textPrimary)
+                .frame(width: 26, height: 24)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func barIconButton(_ system: String, help: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 12))
+                .foregroundColor(.textPrimary)
+                .frame(width: 26, height: 24)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func insertLinkFromBar() {
+        let url = linkURL.trimmingCharacters(in: .whitespaces)
+        showLinkPopover = false
+        guard !url.isEmpty else { return }
+        wysiwyg.exec("addLink", payload: ["linkUrl": url, "linkText": url])
+        linkURL = ""
     }
 
     private var focusHUD: some View {

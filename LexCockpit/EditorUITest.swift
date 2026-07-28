@@ -73,11 +73,28 @@ enum EditorUITest {
         expect(locked == 2, "block cards are locked against inline typing (got \(locked))")
 
         let ui = await evalBool(controller, #"""
-            ['bubble', 'gallery', 'plusbtn', 'blockbar'].every(function (id) {
+            ['bubble', 'gallery', 'plusbtn', 'blockbar', 'page', 'docTitle'].every(function (id) {
               return !!document.getElementById(id);
             })
             """#)
-        expect(ui, "bubble + gallery + plus handle + block bar exist")
+        expect(ui, "bubble + gallery + plus + block bar + page + on-canvas title exist")
+
+        let bridges = await evalBool(controller, #"""
+            typeof window.__openGallery === 'function' && typeof window.__execCmd === 'function'
+              && typeof window.setDocTitle === 'function'
+            """#)
+        expect(bridges, "format-bar bridges (openGallery/execCmd/setDocTitle) exist")
+
+        controller.setDocTitle("UI Test Title")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let titleOK = await evalBool(controller, #"""
+            document.getElementById('docTitle').textContent === 'UI Test Title'
+            """#)
+        let mdBefore: String? = await withCheckedContinuation { cont in
+            controller.currentMarkdown { cont.resume(returning: $0) }
+        }
+        expect(titleOK && !(mdBefore ?? "").contains("UI Test Title"),
+               "on-canvas title renders and stays out of the markdown body")
 
         let blocks = await evalInt(controller, "window.__blocks.length")
         expect(blocks == BlockKind.allCases.count, "gallery payload has all \(BlockKind.allCases.count) blocks (got \(blocks))")

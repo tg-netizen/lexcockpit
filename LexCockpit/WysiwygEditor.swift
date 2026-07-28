@@ -49,10 +49,12 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     var onBlockDelete: ((Int) -> Void)?
     var onBlockInsert: ((String, String?) -> Void)?
     var onImagePick: (() -> Void)?
+    var onTitle: ((String) -> Void)?
 
     private var pendingLoad: String?
     private var pendingMode: (mode: String, lock: Bool)?
     private var pendingBlocks: String?
+    private var pendingTitle: String?
 
     override init() {
         let cfg = WKWebViewConfiguration()
@@ -102,6 +104,31 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
             self?.webView.evaluateJavaScript("window.__revealVault && window.__revealVault(\(index));",
                                              completionHandler: nil)
         }
+    }
+
+    /// Mirror the frontmatter title into the on-canvas title element.
+    func setDocTitle(_ title: String) {
+        guard ready else { pendingTitle = title; return }
+        call("setDocTitle", title)
+    }
+
+    /// Run a Toast editor command from the native format bar.
+    func exec(_ command: String, payload: [String: Any]? = nil) {
+        guard let cmd = Self.json(command) else { return }
+        var payloadJS = "null"
+        if let payload = payload,
+           let data = try? JSONSerialization.data(withJSONObject: payload),
+           let str = String(data: data, encoding: .utf8) {
+            payloadJS = str
+        }
+        webView.evaluateJavaScript("window.__execCmd && window.__execCmd(\(cmd), \(payloadJS));",
+                                   completionHandler: nil)
+    }
+
+    /// Open the block gallery near the caret (format-bar entry point).
+    func openGallery() {
+        webView.evaluateJavaScript("window.__openGallery && window.__openGallery();",
+                                   completionHandler: nil)
     }
 
     /// Drop the plain-text insertion marker at the caret (Swift-initiated
@@ -158,6 +185,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
             ready = true
             if let pm = pendingMode { pendingMode = nil; setMode(pm.mode, lock: pm.lock) }
             if let blocks = pendingBlocks { pendingBlocks = nil; installBlocks(json: blocks) }
+            if let t = pendingTitle { pendingTitle = nil; setDocTitle(t) }
             if let pending = pendingLoad { pendingLoad = nil; call("loadMarkdown", pending) }
         case "change":
             if let md = body["md"] as? String { onChange?(md) }
@@ -171,6 +199,8 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
             onBlockInsert?((body["kind"] as? String) ?? "", body["text"] as? String)
         case "imagepick":
             onImagePick?()
+        case "title":
+            if let t = body["text"] as? String { onTitle?(t) }
         case "image":
             if let id = body["id"] as? String,
                let name = body["name"] as? String,
@@ -192,11 +222,23 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     <link rel="stylesheet" href="https://uicdn.toast.com/editor/latest/toastui-editor.min.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=EB+Garamond:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;600&display=swap">
     <style>
-      html, body { margin: 0; height: 100%; background: #fff; }
-      #editor { height: 100vh; }
-      .toastui-editor-defaultUI { border: none; }
+      html, body { margin: 0; background: #F2F3F5; }
+      #page { max-width: 880px; margin: 24px auto 80px; background: #fff;
+        border-radius: 5px; padding: 50px 72px 90px; min-height: calc(100vh - 160px);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.09), 0 10px 34px rgba(0,0,0,0.07); }
+      @media (max-width: 900px) { #page { margin: 12px 10px 60px; padding: 34px 40px 70px; } }
+      #docTitle { font-family: 'Playfair Display', Georgia, serif; font-weight: 900;
+        font-size: 40px; line-height: 1.15; color: #1F2A44; outline: none; margin: 0; }
+      #docTitle:empty::before { content: 'Untitled article'; color: #C3C9D2; }
+      #titleRule { width: 56px; height: 4px; background: #C9B58C; margin: 16px 0 22px; }
+      .toastui-editor-defaultUI { border: none; background: transparent; }
+      .toastui-editor-toolbar { display: none !important; }
+      .toastui-editor-main .toastui-editor, .toastui-editor-ww-container { background: transparent; }
+      .toastui-editor-defaultUI .ProseMirror { padding: 0; }
+      .line-hint::before { content: 'Write — or press \u{201C}/\u{201D} for blocks';
+        color: #A9B0BC; pointer-events: none; }
       .toastui-editor-contents { font-family: 'EB Garamond', Georgia, serif;
-        font-size: 17px; line-height: 1.75; color: #111; max-width: 760px; margin: 0 auto; }
+        font-size: 17.5px; line-height: 1.78; color: #111; }
       .toastui-editor-contents h1, .toastui-editor-contents h2, .toastui-editor-contents h3 {
         font-family: 'Playfair Display', Georgia, serif; color: #1F2A44; border: none; }
       .toastui-editor-contents blockquote { border-left: 3px solid #C9B58C; color: #444; }
@@ -225,9 +267,9 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
       #bubble input { background: #111827; border: 1px solid #374151; color: #fff;
         font-size: 12px; padding: 5px 8px; border-radius: 6px; margin: 3px;
         width: 250px; font-family: inherit; display: none; }
-      #plusbtn { position: fixed; z-index: 999; display: none; width: 24px; height: 24px;
-        border-radius: 12px; border: 1px solid #D6DDE7; background: #fff; color: #1F3A5F;
-        font-size: 16px; line-height: 21px; text-align: center; cursor: pointer;
+      #plusbtn { position: fixed; z-index: 999; display: none; width: 27px; height: 27px;
+        border-radius: 14px; border: 1.5px solid #B9C2CF; background: #fff; color: #4B5563;
+        font-size: 18px; line-height: 23px; text-align: center; cursor: pointer;
         box-shadow: 0 2px 8px rgba(0,0,0,0.10); user-select: none; }
       #plusbtn:hover { background: #F2F6FB; }
       #gallery { position: fixed; z-index: 1001; display: none; width: 560px;
@@ -266,7 +308,11 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
     </style>
     <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
     </head><body>
-    <div id="editor"></div>
+    <div id="page">
+      <div id="docTitle" contenteditable="true" spellcheck="false"></div>
+      <div id="titleRule"></div>
+      <div id="editor"></div>
+    </div>
     <script>
       var bridge = window.webkit.messageHandlers.bridge;
       var suppress = false;
@@ -276,7 +322,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
 
       var editor = new toastui.Editor({
         el: document.getElementById('editor'),
-        height: '100%',
+        height: 'auto',
         initialEditType: 'wysiwyg',
         previewStyle: 'tab',
         usageStatistics: false,
@@ -330,6 +376,45 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         }
       });
       window.__editor = editor;
+
+      // ── On-canvas title (syncs to the frontmatter via Swift) ──
+      var titleEl = document.getElementById('docTitle');
+      var titleTimer = null;
+      titleEl.addEventListener('input', function () {
+        if (titleTimer) clearTimeout(titleTimer);
+        titleTimer = setTimeout(function () {
+          bridge.postMessage({ type: 'title', text: titleEl.textContent || '' });
+        }, 400);
+      });
+      titleEl.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); editor.focus(); }
+      });
+      titleEl.addEventListener('paste', function (ev) {
+        ev.preventDefault();
+        var t = (ev.clipboardData || window.clipboardData).getData('text/plain');
+        document.execCommand('insertText', false, t.replace(/\\s+/g, ' '));
+      });
+      window.setDocTitle = function (t) {
+        if ((titleEl.textContent || '') !== t) titleEl.textContent = t;
+      };
+
+      // ── Entry points for the native format bar ──
+      window.__openGallery = function () {
+        var r = null;
+        try { r = window.getSelection().getRangeAt(0).getBoundingClientRect(); } catch (e) {}
+        if (!r || (!r.top && !r.height)) {
+          var p = document.getElementById('page').getBoundingClientRect();
+          r = { left: p.left + 90, top: 150, bottom: 170, width: 0, height: 0 };
+        }
+        if (typeof slashTriggered !== 'undefined') slashTriggered = false;
+        window.__galleryOpen(r);
+      };
+      window.__execCmd = function (name, payload) {
+        try {
+          editor.focus();
+          if (payload) { editor.exec(name, payload); } else { editor.exec(name); }
+        } catch (e) {}
+      };
 
       window.loadMarkdown = function (md) {
         suppress = true;
@@ -535,6 +620,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         });
         gallery.appendChild(grid);
       }
+      window.__galleryOpen = function (anchorRect) { openGallery(anchorRect); };
       function openGallery(anchorRect) {
         gIdx = 0;
         renderGallery();
@@ -602,6 +688,32 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
       }, true);
       document.addEventListener('mousedown', function (ev) {
         if (gOpen && !gallery.contains(ev.target) && ev.target !== plus) { slashTriggered = false; closeGallery(); }
+      });
+
+      // ── Canva-style: circled + and hint on the current empty line ──
+      var hintTimer = null;
+      function updateLineUI() {
+        var old = document.querySelector('.line-hint');
+        if (old) old.classList.remove('line-hint');
+        var root = wwRoot();
+        if (!root) return;
+        var sel = window.getSelection();
+        if (!sel || !sel.anchorNode || !sel.isCollapsed) return;
+        var el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+        if (!el || !root.contains(el)) return;
+        while (el && el.parentElement !== root) el = el.parentElement;
+        if (!el || el.tagName !== 'P' || (el.textContent || '') !== '') return;
+        el.classList.add('line-hint');
+        plusTarget = el;
+        var r = el.getBoundingClientRect();
+        var pr = document.getElementById('page').getBoundingClientRect();
+        plus.style.display = 'block';
+        plus.style.left = Math.max(pr.left + 16, r.left - 46) + 'px';
+        plus.style.top = (r.top - 2) + 'px';
+      }
+      document.addEventListener('selectionchange', function () {
+        if (hintTimer) clearTimeout(hintTimer);
+        hintTimer = setTimeout(updateLineUI, 120);
       });
       document.addEventListener('scroll', function () {
         hideBlockbar(); hideBubble(); plus.style.display = 'none';
