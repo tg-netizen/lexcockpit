@@ -125,6 +125,22 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
                                    completionHandler: nil)
     }
 
+    /// Headings of the document (for the bottom-bar outline menu).
+    func outline(_ completion: @escaping ([(Int, String)]) -> Void) {
+        webView.evaluateJavaScript("window.__outline ? window.__outline() : '[]'") { value, _ in
+            guard let s = value as? String, let data = s.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                completion([]); return
+            }
+            completion(arr.map { (($0["level"] as? Int) ?? 2, ($0["text"] as? String) ?? "") })
+        }
+    }
+
+    func scrollToHeading(_ index: Int) {
+        webView.evaluateJavaScript("window.__scrollHeading && window.__scrollHeading(\(index));",
+                                   completionHandler: nil)
+    }
+
     /// Open the block gallery near the caret (format-bar entry point).
     func openGallery() {
         webView.evaluateJavaScript("window.__openGallery && window.__openGallery();",
@@ -408,6 +424,18 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         }
         if (typeof slashTriggered !== 'undefined') slashTriggered = false;
         window.__galleryOpen(r);
+      };
+      window.__outline = function () {
+        var hs = document.querySelectorAll('.toastui-editor-ww-container h2, .toastui-editor-ww-container h3');
+        var out = [];
+        for (var i = 0; i < hs.length; i++) {
+          out.push({ level: hs[i].tagName === 'H2' ? 2 : 3, text: hs[i].textContent || '' });
+        }
+        return JSON.stringify(out);
+      };
+      window.__scrollHeading = function (i) {
+        var hs = document.querySelectorAll('.toastui-editor-ww-container h2, .toastui-editor-ww-container h3');
+        if (hs[i]) hs[i].scrollIntoView({ behavior: 'smooth', block: 'start' });
       };
       window.__execCmd = function (name, payload) {
         try {

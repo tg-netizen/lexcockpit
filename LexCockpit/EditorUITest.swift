@@ -81,9 +81,13 @@ enum EditorUITest {
 
         let bridges = await evalBool(controller, #"""
             typeof window.__openGallery === 'function' && typeof window.__execCmd === 'function'
-              && typeof window.setDocTitle === 'function'
+              && typeof window.setDocTitle === 'function' && typeof window.__outline === 'function'
+              && typeof window.__scrollHeading === 'function'
             """#)
-        expect(bridges, "format-bar bridges (openGallery/execCmd/setDocTitle) exist")
+        expect(bridges, "format-bar + outline bridges exist")
+
+        let outlineOK = await evalString(controller, "window.__outline()")
+        expect(outlineOK.contains("Section"), "outline lists the document's headings")
 
         controller.setDocTitle("UI Test Title")
         try? await Task.sleep(nanoseconds: 300_000_000)

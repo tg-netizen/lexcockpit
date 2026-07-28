@@ -462,6 +462,10 @@ extension WorkspaceModel {
 
     func openEntry(_ entry: ContentEntry) async {
         guard let repo = site.repo else { return }
+        if let current = editor, current.repoPath == entry.path {
+            editorFull = true            // re-enter the room, unsaved work intact
+            return
+        }
         do {
             let f = try await GitHubAPI.file(repo: repo, path: entry.path)
             guard let text = f.decodedText() else {
@@ -496,6 +500,7 @@ extension WorkspaceModel {
         doc.startAutosave()
         editor = doc
         editorDirty = doc.dirty
+        editorFull = true
         preview.renderNow(doc.bodyText)
     }
 
@@ -530,34 +535,34 @@ struct ContentTabView: View {
     @AppStorage("contentListVisible") private var listVisible = true
 
     var body: some View {
-        HSplitView {
-            if listVisible && !chrome.focus {
-                ContentLibraryView(model: model)
-                    .frame(minWidth: 250, idealWidth: 310, maxWidth: 400)
+        Group {
+            if let doc = model.editor, model.editorFull {
+                // Canva-style takeover: the document IS the screen.
+                EditorView(model: model, doc: doc, openDeploys: openDeploys,
+                           onBack: {
+                               withAnimation(.easeInOut(duration: 0.18)) { model.editorFull = false }
+                           })
+                    .id(doc.id)              // fresh editor (and webview) per document
+            } else {
+                libraryHome
             }
-            Group {
-                if let doc = model.editor {
-                    EditorView(model: model, doc: doc, openDeploys: openDeploys)
-                        .id(doc.id)              // fresh editor (and webview) per document
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 34)).foregroundColor(.textSecondary)
-                        Text("Select an article").font(.headline).foregroundColor(.textPrimary)
-                        Text("Pick one from the library — or create a new draft with the + button.")
-                            .font(.callout).foregroundColor(.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.bgPage)
-                }
-            }
-            .frame(minWidth: 460, maxWidth: .infinity)
         }
-        .background(
-            Button("") { withAnimation(.easeInOut(duration: 0.15)) { listVisible.toggle() } }
-                .keyboardShortcut("0", modifiers: .command)
-                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
-        )
+    }
+
+    /// The library as a Canva-style home: a centered card of all articles.
+    private var libraryHome: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 26)
+            ContentLibraryView(model: model)
+                .frame(maxWidth: 700)
+                .background(Color.bgCard)
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+                .overlay(RoundedRectangle(cornerRadius: 11).stroke(Color.cardBorder))
+                .padding(.vertical, 20)
+            Spacer(minLength: 26)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.bgPage)
     }
 }
 
@@ -771,6 +776,7 @@ struct EditorView: View {
     @ObservedObject var model: WorkspaceModel
     @ObservedObject var doc: EditorDocument
     var openDeploys: () -> Void
+    var onBack: (() -> Void)? = nil
 
     @EnvironmentObject var chrome: ChromeModel
     @StateObject private var wysiwyg = WysiwygController()
@@ -785,11 +791,13 @@ struct EditorView: View {
     @AppStorage("typewriterEnabled") private var typewriterOn = true
     @State private var showHistory = false
     @State private var blockEdit: BlockEditContext?
-    @State private var showMedia = false
     @State private var showSource = false
-    @State private var showDetails = false
     @State private var showLinkPopover = false
     @State private var linkURL = ""
+    enum RailPanel { case media, details }
+    @State private var railPanel: RailPanel?
+    @State private var outline: [(Int, String)] = []
+    @AppStorage("editorZoom") private var editorZoom = 1.0
 
     @State private var showPublish = false
     @State private var scheduleDate = Date().addingTimeInterval(86400)
@@ -801,8 +809,11 @@ struct EditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            if !chrome.focus {
+                editorTopBar
+                formatBarRow
+                Divider()
+            }
 
             if let name = external.activeEditorName {
                 HStack(spacing: 8) {
@@ -817,16 +828,41 @@ struct EditorView: View {
                 .background(Color.navyTint)
                 Divider()
             }
-            if !chrome.focus && mode != .previewOnly {
-                CoverCardView(doc: doc, coverImage: coverImage, busy: canvaBusy,
-                              onChoose: { pickImage { url in Task { await coverFromFile(url) } } },
-                              onCanva: { openCanva(asCover: true) },
-                              onRemove: { doc.heroImagePath = ""; doc.recomputeDirty() },
-                              onDrop: { providers in handleDrop(providers, asCover: true) })
-                Divider()
-            }
             HStack(spacing: 0) {
-                editorArea
+                if !chrome.focus {
+                    leftRail
+                    Divider()
+                    if railPanel == .details {
+                        ScrollView { frontmatterForm.padding(12) }
+                            .frame(width: 300)
+                            .background(Color.bgCard)
+                        Divider()
+                    } else if railPanel == .media {
+                        MediaPanel(model: model, doc: doc,
+                                   onInsert: { path, stem in
+                                       wysiwyg.insert(markdown: "![\(stem)](\(path))")
+                                   },
+                                   onCover: { path in doc.heroImagePath = path; doc.recomputeDirty() },
+                                   onUpload: { pickImage { url in Task { await mediaFromFile(url) } } })
+                            .frame(width: 250)
+                        Divider()
+                    }
+                }
+                VStack(spacing: 0) {
+                    if !chrome.focus && mode != .previewOnly {
+                        CoverCardView(doc: doc, coverImage: coverImage, busy: canvaBusy,
+                                      onChoose: { pickImage { url in Task { await coverFromFile(url) } } },
+                                      onCanva: { openCanva(asCover: true) },
+                                      onRemove: { doc.heroImagePath = ""; doc.recomputeDirty() },
+                                      onDrop: { providers in handleDrop(providers, asCover: true) })
+                        Divider()
+                    }
+                    editorArea
+                    if !chrome.focus {
+                        Divider()
+                        bottomBar
+                    }
+                }
                 if showQuality && !chrome.focus {
                     Divider()
                     QualityPanel(doc: doc, coverImage: coverImage,
@@ -834,20 +870,27 @@ struct EditorView: View {
                         .frame(width: 270)
                         .transition(.move(edge: .trailing))
                 }
-                if showMedia && !chrome.focus {
-                    Divider()
-                    MediaPanel(model: model, doc: doc,
-                               onInsert: { path, stem in
-                                   wysiwyg.insert(markdown: "![\(stem)](\(path))")
-                               },
-                               onCover: { path in doc.heroImagePath = path; doc.recomputeDirty() },
-                               onUpload: { pickImage { url in Task { await mediaFromFile(url) } } })
-                        .frame(width: 232)
-                        .transition(.move(edge: .trailing))
-                }
             }
         }
+        .background(
+            // Keyboard anchors that must survive focus mode hiding the bars.
+            Group {
+                Button("") { withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() } }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                Button("") {
+                    Task {
+                        if let repo = model.site.repo {
+                            await doc.save(repo: repo)
+                            if !doc.dirty { runLiveCheck() }
+                        }
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+            }
+            .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        )
         .onAppear { wireBridge() }
+        .onChange(of: doc.bodyText) { _ in refreshOutline() }
         .onChange(of: chrome.focus) { focused in
             wysiwyg.setTypewriter(focused && typewriterOn)
         }
@@ -886,11 +929,6 @@ struct EditorView: View {
         }
         .onDisappear { external.stop() }
         .navigationTitle(doc.title.isEmpty ? doc.fileName : doc.title)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                toolbarActions
-            }
-        }
         .sheet(item: $canvaSheet) { ctx in
             CanvaDesignSheet(context: ctx) { data, name in
                 await uploadDropped(data: data, name: name, asCover: ctx.isCover)
@@ -903,20 +941,7 @@ struct EditorView: View {
         }
         .onChange(of: mode) { m in SessionHub.shared.state.editorMode = m.rawValue }
         .onChange(of: doc.title) { t in wysiwyg.setDocTitle(t) }
-        .sheet(isPresented: $showDetails) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Article details")
-                        .font(.system(size: 15, weight: .bold)).foregroundColor(.textPrimary)
-                    Spacer()
-                    Button("Done") { showDetails = false }.keyboardShortcut(.defaultAction)
-                }
-                .padding(14)
-                Divider()
-                ScrollView { frontmatterForm.padding(14) }
-            }
-            .frame(width: 640, height: 420)
-        }
+
         .alert("Edit this graphic in Canva?", isPresented: Binding(
             get: { pendingCanvaEdit != nil }, set: { if !$0 { pendingCanvaEdit = nil } })) {
             Button("Edit in Canva") {
@@ -1130,7 +1155,9 @@ struct EditorView: View {
         wysiwyg.installBlocks(json: BlockKind.jsPayload)
         preview.renderNow(doc.bodyText)
         SessionHub.shared.state.articlePath = doc.repoPath
-        if let raw = SessionHub.shared.state.editorMode, let m = EditorMode(rawValue: raw) { mode = m }
+        mode = .editorOnly           // Canva rule: one canvas; preview via the eye
+        wysiwyg.webView.pageZoom = editorZoom
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { refreshOutline() }
     }
 
     /// Re-peel the body into the canvas (after block edit/delete/insert,
@@ -1304,146 +1331,72 @@ struct EditorView: View {
 
     // MARK: Chrome
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { listVisible.toggle() }
-            } label: { Image(systemName: "sidebar.left") }
-            .buttonStyle(.plain)
-            .foregroundColor(listVisible ? .brandNavy : .textSecondary)
-            .keyboardShortcut("0", modifiers: .command)
-            .help("Show/hide the article library (⌘0)")
-
-            Text(doc.fileName)
-                .font(.system(.callout, design: .monospaced))
-                .foregroundColor(.textSecondary)
-            publishChip
-            if doc.uploadingImage {
-                ProgressView().controlSize(.small)
-                Text("Uploading image…").font(.caption).foregroundColor(.textSecondary)
+    /// Canva-style Kopfleiste: navigation, document identity and every
+    /// document action live here — the window toolbar stays empty.
+    private var editorTopBar: some View {
+        HStack(spacing: 11) {
+            if let onBack = onBack {
+                Button(action: onBack) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Library")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                }
+                .buttonStyle(.plain)
+                .help("Back to all articles")
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(doc.title.isEmpty ? doc.fileName : doc.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    publishChip
+                    Text(doc.fileName)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                        .lineLimit(1)
+                    if doc.uploadingImage {
+                        ProgressView().controlSize(.mini)
+                        Text("Uploading…").font(.system(size: 10)).foregroundColor(.white.opacity(0.7))
+                    }
+                }
             }
             Spacer()
-
+            topBarTools
+            syncChip
+            topBarCommit
         }
-        .padding(.horizontal, 14).padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(LinearGradient(colors: [Color(red: 0x17/255, green: 0x2A/255, blue: 0x46/255),
+                                            Color.accentNavy],
+                                   startPoint: .leading, endPoint: .trailing))
     }
 
-    /// All editor actions live in the native window toolbar (V6).
-    @ViewBuilder private var toolbarActions: some View {
-            Button {
-                showDetails = true
-            } label: {
-                Image(systemName: "info.circle")
-                    .foregroundColor(.textSecondary)
-            }
-            .buttonStyle(.plain)
-            .help("Article details — date, tags, description, author")
-
-            Button {
-                showHistory = true
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundColor(.textSecondary)
-            }
-            .buttonStyle(.plain)
-            .help("Local history — every save, browsable offline")
-            Menu {
-                ForEach(BlockKind.allCases) { block in
-                    Button {
-                        wysiwyg.placeInsertionMarker()
-                        if block.action == "imagepick" {
-                            figurePickFlow()
-                        } else {
-                            substituteMarker(with: block.markdown)
-                        }
-                    } label: { Label(block.title, systemImage: block.icon) }
-                }
-            } label: {
-                Image(systemName: "plus.square")
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 34)
-            .help("Insert block (or type “/” on an empty line)")
-
-            Menu {
-                ForEach(CanvaPreset.allCases) { preset in
-                    Button(preset.title) { openCanvaPreset(preset) }
-                }
-                Divider()
-                Button("Open Canva in browser") {
-                    NSWorkspace.shared.open(URL(string: "https://www.canva.com/")!)
-                }
-                Button("From my Canva…") {
-                    if CanvaAuth.shared.isConnected { showCanvaPicker = true } else { showConnectHint = true }
-                }
-            } label: {
-                Image(systemName: "paintbrush")
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 34)
-            .disabled(canvaBusy)
-            .help("Canva graphics — presets or your recent designs")
-
-            Menu {
-                ForEach(ExternalEditor.installed()) { editor in
-                    Button(editor.name) { startExternal(editor) }
-                }
-                if external.activeEditorName != nil {
-                    Divider()
-                    Button("Stop external session") { external.stop() }
-                }
-            } label: {
-                Image(systemName: "arrow.up.forward.app")
-                    .foregroundColor(external.activeEditorName != nil ? .brandNavy : .textSecondary)
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 34)
-            .help("Edit in an external editor (MarkEdit, CotEditor, TextEdit) — saves sync back live")
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() }
-            } label: {
-                Image(systemName: chrome.focus ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .foregroundColor(chrome.focus ? .brandNavy : .textSecondary)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("f", modifiers: [.command, .shift])
-            .help("Focus mode (⌘⇧F)")
-
-            Button {
+    private var topBarTools: some View {
+        HStack(spacing: 2) {
+            canvaMenu
+            externalMenu
+            topIcon("clock.arrow.circlepath", help: "Local history — every save") { showHistory = true }
+            topIcon("checklist", active: showQuality, key: "i", help: "Writing-quality panel (⌘I)") {
                 withAnimation(.easeInOut(duration: 0.15)) { showQuality.toggle() }
-            } label: {
-                Image(systemName: "checklist")
-                    .foregroundColor(showQuality ? .brandNavy : .textSecondary)
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut("i", modifiers: .command)
-            .help("Writing-quality panel (⌘I)")
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { showMedia.toggle() }
-            } label: {
-                Image(systemName: "photo.stack")
-                    .foregroundColor(showMedia ? .brandNavy : .textSecondary)
+            topIcon(mode == .split ? "eye.fill" : "eye", active: mode == .split, key: "2",
+                    help: "Preview next to the document (⌘2)") {
+                withAnimation(.easeInOut(duration: 0.15)) { mode = mode == .split ? .editorOnly : .split }
             }
-            .buttonStyle(.plain)
-            .help("Media panel — this article's images")
-
-            Button {
-                showSource = true
-            } label: {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .foregroundColor(.textSecondary)
+            topIcon("arrow.up.left.and.arrow.down.right", key: "f", focusKey: true,
+                    help: "Focus mode (⌘⇧F)") {
+                withAnimation(.easeInOut(duration: 0.15)) { chrome.focus.toggle() }
             }
-            .buttonStyle(.plain)
-            .help("View source — the raw markdown, for fine control")
+        }
+    }
 
-            modeButton(.editorOnly, icon: "square.and.pencil", key: "1", help: "Editor only (⌘1)")
-            modeButton(.split, icon: "rectangle.split.2x1", key: "2", help: "Editor + preview (⌘2)")
-            modeButton(.previewOnly, icon: "doc.richtext", key: "3", help: "Preview only (⌘3)")
-
-            syncChip
-
+    private var topBarCommit: some View {
+        HStack(spacing: 8) {
             Button("Save") {
                 Task {
                     if let repo = model.site.repo {
@@ -1455,20 +1408,197 @@ struct EditorView: View {
             .keyboardShortcut("s", modifiers: .command)
             .disabled(doc.saving || model.site.repo == nil)
             .help("Commit the current state (keeps its Draft/Published status) — ⌘S")
-
             Button {
                 scheduleDate = parseISO(doc.scheduledAt) ?? Date().addingTimeInterval(86400)
                 showPublish = true
             } label: {
-                Label("Publish", systemImage: "paperplane.fill")
-                    .padding(.horizontal, 4)
+                HStack(spacing: 5) {
+                    Image(systemName: "paperplane.fill")
+                    Text("Publish")
+                }
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundColor(.accentNavy)
+                .padding(.horizontal, 13).padding(.vertical, 5)
+                .background(Capsule().fill(Color.white))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.accentNavy)
-            .disabled(doc.saving || model.site.repo == nil)
+            .buttonStyle(.plain)
             .popover(isPresented: $showPublish, arrowEdge: .bottom) { publishPopover }
+            .help("Publish now, schedule, or go back to draft")
+        }
     }
 
+    private func topIcon(_ system: String, active: Bool = false, key: Character? = nil, focusKey: Bool = false,
+                         help: String, action: @escaping () -> Void) -> some View {
+        let btn = Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 12.5))
+                .foregroundColor(active ? .brandGold : .white.opacity(0.92))
+                .frame(width: 26, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        return Group {
+            if let key = key {
+                btn.keyboardShortcut(KeyEquivalent(key), modifiers: focusKey ? [.command, .shift] : .command)
+            } else {
+                btn
+            }
+        }
+    }
+
+    private var canvaMenu: some View {
+        Menu {
+            ForEach(CanvaPreset.allCases) { preset in
+                Button(preset.title) { openCanvaPreset(preset) }
+            }
+            Divider()
+            Button("Open Canva in browser") {
+                NSWorkspace.shared.open(URL(string: "https://www.canva.com/")!)
+            }
+            Button("From my Canva…") {
+                if CanvaAuth.shared.isConnected { showCanvaPicker = true } else { showConnectHint = true }
+            }
+        } label: {
+            Image(systemName: "paintbrush")
+                .font(.system(size: 12.5))
+                .foregroundColor(.white.opacity(0.92))
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: 32)
+        .disabled(canvaBusy)
+        .help("Canva graphics — presets or your recent designs")
+    }
+
+    private var externalMenu: some View {
+        Menu {
+            ForEach(ExternalEditor.installed()) { editor in
+                Button(editor.name) { startExternal(editor) }
+            }
+            if external.activeEditorName != nil {
+                Divider()
+                Button("Stop external session") { external.stop() }
+            }
+        } label: {
+            Image(systemName: "arrow.up.forward.app")
+                .font(.system(size: 12.5))
+                .foregroundColor(external.activeEditorName != nil ? .brandGold : .white.opacity(0.92))
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: 32)
+        .help("Edit in MarkEdit, CotEditor or TextEdit — saves sync back live")
+    }
+
+    /// Canva-style left rail: panels and tools that live beside the document.
+    private var leftRail: some View {
+        VStack(spacing: 4) {
+            railButton("plus.square.on.square", label: "Blocks", active: false,
+                       help: "Insert a design block at the cursor") { wysiwyg.openGallery() }
+            railButton("photo.stack", label: "Media", active: railPanel == .media,
+                       help: "This article's images") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    railPanel = railPanel == .media ? nil : .media
+                }
+            }
+            railButton("info.circle", label: "Details", active: railPanel == .details,
+                       help: "Date, tags, description, author") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    railPanel = railPanel == .details ? nil : .details
+                }
+            }
+            railButton("chevron.left.forwardslash.chevron.right", label: "Source", active: false,
+                       help: "Raw markdown, for fine control") { showSource = true }
+            Spacer()
+        }
+        .padding(.vertical, 10)
+        .frame(width: 64)
+        .background(Color.bgCard)
+    }
+
+    private func railButton(_ system: String, label: String, active: Bool,
+                            help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: system)
+                    .font(.system(size: 15))
+                Text(label)
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundColor(active ? .accentNavy : .textSecondary)
+            .frame(width: 56, height: 44)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(active ? Color.navyTint : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    /// Canva-style bottom bar: outline, stats, zoom.
+    private var bottomBar: some View {
+        HStack(spacing: 14) {
+            Menu {
+                if outline.isEmpty {
+                    Text("No headings yet")
+                } else {
+                    ForEach(Array(outline.enumerated()), id: \.offset) { i, h in
+                        Button((h.0 == 3 ? "    " : "") + h.1) { wysiwyg.scrollToHeading(i) }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "list.bullet.indent").font(.system(size: 10.5))
+                    Text("Outline").font(.system(size: 11.5))
+                }
+                .foregroundColor(.textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 92)
+            .help("Jump to a section")
+            Button {
+                typewriterOn.toggle()
+            } label: {
+                Image(systemName: "keyboard")
+                    .font(.system(size: 11))
+                    .foregroundColor(typewriterOn ? .accentNavy : .textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Typewriter scrolling in focus mode")
+            Spacer()
+            Text(bottomStats)
+                .font(.system(size: 11))
+                .foregroundColor(.textSecondary)
+            Spacer()
+            HStack(spacing: 6) {
+                Button { setZoom(editorZoom - 0.1) } label: { Image(systemName: "minus") }
+                    .buttonStyle(.plain).foregroundColor(.textSecondary)
+                Text("\(Int((editorZoom * 100).rounded())) %")
+                    .font(.system(size: 11)).foregroundColor(.textSecondary)
+                    .frame(width: 44)
+                Button { setZoom(editorZoom + 0.1) } label: { Image(systemName: "plus") }
+                    .buttonStyle(.plain).foregroundColor(.textSecondary)
+            }
+            .help("Document zoom")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(Color.bgCard)
+    }
+
+    private var bottomStats: String {
+        let words = doc.bodyText.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+        let minutes = max(1, Int((Double(words) / 220.0).rounded(.up)))
+        return "\(words) words · \(minutes) min read"
+    }
+
+    private func setZoom(_ z: Double) {
+        editorZoom = min(1.6, max(0.7, (z * 10).rounded() / 10))
+        wysiwyg.webView.pageZoom = editorZoom
+    }
+
+    private func refreshOutline() {
+        wysiwyg.outline { headings in outline = headings }
+    }
 
     // MARK: Publish flow (Ghost pattern: states + schedule + checklist)
 
@@ -1591,15 +1721,6 @@ struct EditorView: View {
         }
     }
 
-    private func modeButton(_ m: EditorMode, icon: String, key: KeyEquivalent, help: String) -> some View {
-        Button { mode = m } label: {
-            Image(systemName: icon)
-                .foregroundColor(mode == m ? .brandNavy : .textSecondary)
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(key, modifiers: .command)
-        .help(help)
-    }
 
     private var frontmatterForm: some View {
         VStack(spacing: 8) {
@@ -1727,18 +1848,14 @@ struct EditorView: View {
     /// The Toast UI WYSIWYG surface (markdown power-mode via its built-in
     /// mode switch). Accepts image drops from Finder / Canva exports.
     private var wysiwygEditor: some View {
-        ZStack(alignment: .top) {
-            WebViewRepresentable(webView: wysiwyg.webView)
-                .onDrop(of: ["public.file-url", "public.image"], isTargeted: .constant(false)) { providers in
-                    handleDrop(providers, asCover: false)
-                }
-            formatBar
-                .padding(.top, 10)
-        }
+        WebViewRepresentable(webView: wysiwyg.webView)
+            .onDrop(of: ["public.file-url", "public.image"], isTargeted: .constant(false)) { providers in
+                handleDrop(providers, asCover: false)
+            }
     }
 
-    /// Canva-style persistent format bar floating over the canvas.
-    private var formatBar: some View {
+    /// Canva-style persistent format row under the Kopfleiste.
+    private var formatBarRow: some View {
         HStack(spacing: 2) {
             Menu {
                 Button("Heading 2") { wysiwyg.exec("heading", payload: ["level": 2]) }
@@ -1781,17 +1898,15 @@ struct EditorView: View {
             .padding(.horizontal, 7)
             .help("Insert a design block")
             barIconButton("photo", help: "Media panel") {
-                withAnimation(.easeInOut(duration: 0.15)) { showMedia.toggle() }
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    railPanel = railPanel == .media ? nil : .media
+                }
             }
+            Spacer()
         }
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 12)
         .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.bgCard)
-                .shadow(color: .black.opacity(0.14), radius: 9, y: 3)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.cardBorder))
+        .background(Color.bgCard)
     }
 
     private var barDivider: some View {

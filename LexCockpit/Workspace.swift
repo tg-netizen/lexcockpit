@@ -35,6 +35,10 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 final class WorkspaceModel: ObservableObject {
     let site: SiteProject
 
+    /// Canva-style editor takeover: when true the Content tab shows ONLY the
+    /// document editor (no library column, no workspace tab bar).
+    @Published var editorFull = false
+
     // Deploys
     @Published var deploys: [NetlifyDeploy] = []
     @Published var deploysError: String?
@@ -142,7 +146,7 @@ struct WorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !chrome.focus {
+            if !chrome.focus && !(tab == .content && model.editorFull) {
                 topBar
                 Divider()
             }
