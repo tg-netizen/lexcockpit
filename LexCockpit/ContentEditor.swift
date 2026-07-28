@@ -859,9 +859,9 @@ struct EditorView: View {
                     leftRail
                     Divider()
                     if railPanel == .details {
-                        ScrollView { frontmatterForm.padding(12) }
-                            .frame(width: 300)
-                            .background(Color.bgCard)
+                        detailsPanel
+                            .frame(width: 290)
+                            .clipped()
                         Divider()
                     } else if railPanel == .media {
                         MediaPanel(model: model, doc: doc,
@@ -1751,6 +1751,60 @@ struct EditorView: View {
         }
     }
 
+
+    /// Narrow vertical details panel for the left rail (the old header
+    /// form is wide by design and would overflow the column).
+    private var detailsPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Article details")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.textSecondary)
+                    .textCase(.uppercase)
+                panelField("Title", text: $doc.title, locked: doc.opaqueKeys.contains("title"))
+                panelField("Date (YYYY-MM-DD)", text: $doc.dateStr, locked: doc.opaqueKeys.contains("date"))
+                panelField("Author", text: $doc.author, locked: doc.opaqueKeys.contains("author"))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Description").font(.caption).foregroundColor(.textSecondary)
+                    TextEditor(text: $doc.descriptionText)
+                        .font(.system(size: 12.5))
+                        .frame(height: 74)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cardBorder))
+                        .disabled(doc.opaqueKeys.contains("description"))
+                }
+                panelField("Tags (comma-separated)", text: $doc.tagsCSV, locked: doc.opaqueKeys.contains("tags"))
+                Toggle("Draft", isOn: $doc.isDraft)
+                    .toggleStyle(.switch)
+                    .disabled(doc.opaqueKeys.contains("draft") && doc.opaqueKeys.contains("status"))
+                    .help("Draft on = draft: true / status: draft. Off = published.")
+                if !doc.opaqueKeys.isEmpty {
+                    Text("Locked (complex YAML, preserved untouched): \(doc.opaqueKeys.sorted().joined(separator: ", "))")
+                        .font(.caption2).foregroundColor(.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+        }
+        .background(Color.bgCard)
+        .onChange(of: doc.title) { _ in doc.recomputeDirty() }
+        .onChange(of: doc.dateStr) { _ in doc.recomputeDirty() }
+        .onChange(of: doc.author) { _ in doc.recomputeDirty() }
+        .onChange(of: doc.descriptionText) { _ in doc.recomputeDirty() }
+        .onChange(of: doc.tagsCSV) { _ in doc.recomputeDirty() }
+        .onChange(of: doc.isDraft) { _ in doc.recomputeDirty() }
+    }
+
+    private func panelField(_ label: String, text: Binding<String>, locked: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(label).font(.caption).foregroundColor(.textSecondary)
+                if locked { Image(systemName: "lock").font(.system(size: 8)).foregroundColor(.textSecondary) }
+            }
+            TextField("", text: text)
+                .textFieldStyle(.roundedBorder)
+                .disabled(locked)
+        }
+    }
 
     private var frontmatterForm: some View {
         VStack(spacing: 8) {
