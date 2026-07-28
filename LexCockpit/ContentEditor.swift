@@ -33,6 +33,12 @@ final class EditorDocument: ObservableObject, Identifiable {
     let isNewFile: Bool
     private(set) var loadedSHA: String?
     private var fmDoc: FrontmatterDoc
+    /// Full frontmatter structure adopted from an applied full text (source
+    /// sheet, external editor, snapshot). Serialization starts from this when
+    /// set, so keys the loaded document never had (tldr, topic, …) survive;
+    /// the fmDoc BASELINE stays untouched so dirty/conflict logic keeps
+    /// working. Cleared when a save/reload moves the baseline.
+    private var overlayDoc: FrontmatterDoc?
 
     // Form fields
     @Published var title: String
@@ -114,6 +120,7 @@ final class EditorDocument: ObservableObject, Identifiable {
     func adopt(_ other: EditorDocument) {
         loadedSHA = other.loadedSHA
         fmDoc = other.exposedDoc
+        overlayDoc = other.overlayDoc
         title = other.title; dateStr = other.dateStr; author = other.author
         descriptionText = other.descriptionText; tagsCSV = other.tagsCSV
         isDraft = other.isDraft; bodyText = other.bodyText
@@ -150,7 +157,7 @@ final class EditorDocument: ObservableObject, Identifiable {
     /// Apply the form onto the parsed doc and serialize. Untouched entries
     /// (and every unknown key) are emitted verbatim from their original lines.
     func serialized() -> String {
-        var doc = fmDoc
+        var doc = overlayDoc ?? fmDoc
         if !opaqueKeys.contains("title") { doc.setScalar("title", title) }
         if !opaqueKeys.contains("date"), !dateStr.isEmpty { doc.setScalar("date", dateStr) }
         if !opaqueKeys.contains("author"), !(author.isEmpty && doc.scalar("author") == nil) {
@@ -237,6 +244,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             loadedSHA = resp.content?.sha ?? loadedSHA
             lastCommitSHA = resp.commit.sha
             fmDoc = FrontmatterDoc.parse(text)      // new baseline
+            overlayDoc = nil
             pendingCanvaLines = nil
             dirty = false
             clearDraft()                            // local autosave no longer needed
@@ -254,6 +262,7 @@ final class EditorDocument: ObservableObject, Identifiable {
                                                ? "content: new \(slug)" : "content: edit \(slug)"),
                                        text: text, sha: loadedSHA)
             fmDoc = FrontmatterDoc.parse(text)
+            overlayDoc = nil
             dirty = false
             statusLine = "Offline (\(urlErr.code == .notConnectedToInternet ? "no connection" : urlErr.localizedDescription)) — commit queued, pushes automatically."
         } catch {
@@ -269,6 +278,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             loadedSHA = f.sha
             let doc = FrontmatterDoc.parse(text)
             fmDoc = doc
+            overlayDoc = nil
             title = doc.scalar("title") ?? ""
             dateStr = doc.scalar("date") ?? ""
             author = doc.scalar("author") ?? ""
@@ -315,6 +325,12 @@ final class EditorDocument: ObservableObject, Identifiable {
     /// remote baseline stays untouched → dirty → normal SHA-checked save.
     func applyFullText(_ text: String) {
         let doc = FrontmatterDoc.parse(text)
+        // Adopt the WHOLE parsed structure as serialization overlay — not
+        // just the form fields — otherwise every key the loaded document
+        // didn't already have (tldr, topic, custom keys) is silently dropped
+        // on save. Found when the FCAS article lost its tldr through the
+        // source sheet. The baseline (fmDoc) deliberately stays put.
+        overlayDoc = doc
         title = doc.scalar("title") ?? title
         dateStr = doc.scalar("date") ?? dateStr
         author = doc.scalar("author") ?? author

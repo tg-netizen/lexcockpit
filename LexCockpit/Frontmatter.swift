@@ -553,6 +553,20 @@ func runFrontmatterSelfTests() -> Bool {
     expect(BlockVault.substituteMarker(in: "No marker here.", with: "<hr>").hasSuffix("<hr>\n"),
            "vanished marker appends the block instead of dropping it")
 
+    // 10c. Applied full text keeps keys the loaded document never had.
+    MainActor.assumeIsolated {
+        let loadedDoc = EditorDocument(repoPath: "content/articles/2026-01-01-x.md",
+                                       text: "---\ntitle: X\ndate: 2026-01-01\nstatus: draft\n---\n\nOld body.\n",
+                                       sha: "abc", isNew: false)
+        loadedDoc.applyFullText("---\ntitle: X\ntldr: Survives the source sheet\ntopic: geopolitics\ndate: 2026-01-01\nstatus: draft\n---\n\nNew body.\n")
+        let reserialized = loadedDoc.serialized()
+        expect(reserialized.contains("tldr: Survives the source sheet")
+               && reserialized.contains("topic: geopolitics")
+               && reserialized.contains("New body."),
+               "applyFullText keeps unknown frontmatter keys (tldr/topic)")
+        expect(loadedDoc.dirty, "applied full text marks the document dirty")
+    }
+
     // 11. Article templates ship structured bodies with design blocks.
     let deep = newArticleTemplate(title: "Test Piece", author: "", template: .deepDive)
     expect(deep.contains("type: deep-dive") && deep.contains("class=\"keyfacts\"")
