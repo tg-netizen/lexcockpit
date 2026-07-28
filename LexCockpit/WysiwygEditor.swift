@@ -52,6 +52,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
 
     private var pendingLoad: String?
     private var pendingMode: (mode: String, lock: Bool)?
+    private var pendingBlocks: String?
 
     override init() {
         let cfg = WKWebViewConfiguration()
@@ -116,8 +117,11 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
                                    completionHandler: nil)
     }
 
-    /// Push the block palette into the shell for the slash menu.
+    /// Push the block palette into the shell for the "+" gallery. Must wait
+    /// for the shell to be ready — a call against the still-loading WebView
+    /// vanishes and leaves the gallery empty.
     func installBlocks(json: String) {
+        guard ready else { pendingBlocks = json; return }
         webView.evaluateJavaScript("window.__blocks = \(json); undefined;", completionHandler: nil)
     }
 
@@ -153,6 +157,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         case "ready":
             ready = true
             if let pm = pendingMode { pendingMode = nil; setMode(pm.mode, lock: pm.lock) }
+            if let blocks = pendingBlocks { pendingBlocks = nil; installBlocks(json: blocks) }
             if let pending = pendingLoad { pendingLoad = nil; call("loadMarkdown", pending) }
         case "change":
             if let md = body["md"] as? String { onChange?(md) }
@@ -487,7 +492,7 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         var r = t.getBoundingClientRect();
         var rr = root.getBoundingClientRect();
         plus.style.display = 'block';
-        plus.style.left = (rr.left - 32) + 'px';
+        plus.style.left = Math.max(2, rr.left - 32) + 'px';
         plus.style.top = (r.top + 1) + 'px';
       });
 
@@ -503,6 +508,12 @@ final class WysiwygController: NSObject, ObservableObject, WKScriptMessageHandle
         gallery.appendChild(h);
         var grid = document.createElement('div');
         grid.className = 'cards';
+        if (!window.__blocks.length) {
+          var empty = document.createElement('div');
+          empty.className = 'bdesc';
+          empty.textContent = 'Blocks are still loading — close and try again.';
+          gallery.appendChild(empty);
+        }
         window.__blocks.forEach(function (b, i) {
           var card = document.createElement('div');
           card.className = 'bcard' + (i === gIdx ? ' sel' : '');

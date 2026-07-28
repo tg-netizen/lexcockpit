@@ -210,6 +210,13 @@ final class EditorDocument: ObservableObject, Identifiable {
     }
 
     func publishNow()  { isDraft = false; scheduledAt = ""; recomputeDirty() }
+
+    /// Live site URL: the site publishes at the file stem (date-slug),
+    /// not the bare slug.
+    func liveURL(site: String?) -> String {
+        let stem = fileName.hasSuffix(".md") ? String(fileName.dropLast(3)) : fileName
+        return (site ?? "") + "/articles/" + stem + ".html"
+    }
     func schedule(_ date: String) { isDraft = true; scheduledAt = date; recomputeDirty() }
     func backToDraft() { isDraft = true; scheduledAt = ""; recomputeDirty() }
 
@@ -806,7 +813,7 @@ struct EditorView: View {
                 if showQuality && !chrome.focus {
                     Divider()
                     QualityPanel(doc: doc, coverImage: coverImage,
-                                 articleURL: (model.site.url ?? "") + "/articles/" + doc.slug + ".html")
+                                 articleURL: doc.liveURL(site: model.site.url))
                         .frame(width: 270)
                         .transition(.move(edge: .trailing))
                 }
@@ -922,6 +929,47 @@ struct EditorView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Add your Canva Client ID + Secret and press “Connect Canva” in Settings (gear icon).")
+        }
+    }
+
+    // MARK: Live check (runs after publishing / saving a published article)
+
+    /// Poll the live article page after a deploy-triggering commit and report
+    /// what actually went out: HTTP status, empty meta description (the tldr
+    /// chain), missing og:image. Results land in the status line + diagnostics.
+    private func runLiveCheck() {
+        guard let base = model.site.url, case .published = doc.publishState else { return }
+        let urlString = doc.liveURL(site: base)
+        guard let url = URL(string: urlString) else { return }
+        Task {
+            doc.statusLine = "Live check: waiting for deploy…"
+            let started = Date()
+            for attempt in 1...10 {
+                try? await Task.sleep(nanoseconds: attempt == 1 ? 20_000_000_000 : 15_000_000_000)
+                var req = URLRequest(url: url)
+                req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                req.timeoutInterval = 15
+                guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                      let http = resp as? HTTPURLResponse else { continue }
+                if http.statusCode == 200, let html = String(data: data, encoding: .utf8) {
+                    // Only trust a page that already contains this article.
+                    guard html.contains(doc.title) || html.contains(doc.slug) else { continue }
+                    var warns: [String] = []
+                    if html.contains("<meta name=\"description\" content=\"\"") {
+                        warns.append("empty description/tldr")
+                    }
+                    if !html.contains("property=\"og:image\"") { warns.append("no og:image") }
+                    let secs = Int(Date().timeIntervalSince(started))
+                    doc.statusLine = warns.isEmpty
+                        ? "Live ✓ after \(secs)s — description + og:image OK"
+                        : "Live after \(secs)s — ⚠ \(warns.joined(separator: ", "))"
+                    diagRecord("livecheck", urlString, status: warns.isEmpty ? "ok" : warns.joined(separator: ","),
+                               start: started, ok: warns.isEmpty)
+                    return
+                }
+            }
+            doc.statusLine = "Live check: page not seen within ~3 min — check Deploys."
+            diagRecord("livecheck", urlString, status: "timeout", start: started, ok: false)
         }
     }
 
@@ -1349,7 +1397,12 @@ struct EditorView: View {
             syncChip
 
             Button("Save") {
-                Task { if let repo = model.site.repo { await doc.save(repo: repo) } }
+                Task {
+                    if let repo = model.site.repo {
+                        await doc.save(repo: repo)
+                        if !doc.dirty { runLiveCheck() }
+                    }
+                }
             }
             .keyboardShortcut("s", modifiers: .command)
             .disabled(doc.saving || model.site.repo == nil)
@@ -1482,7 +1535,12 @@ struct EditorView: View {
 
     private func commitPublish(message: String) {
         showPublish = false
-        Task { if let repo = model.site.repo { await doc.save(repo: repo, message: message) } }
+        Task {
+            if let repo = model.site.repo {
+                await doc.save(repo: repo, message: message)
+                if !doc.dirty { runLiveCheck() }
+            }
+        }
     }
 
     private func modeButton(_ m: EditorMode, icon: String, key: KeyEquivalent, help: String) -> some View {
@@ -2056,12 +2114,50 @@ struct SourceSheet: View {
             }
             .padding(12)
             Divider()
-            TextEditor(text: $text)
-                .font(.system(size: 12.5, design: .monospaced))
-                .scrollContentBackground(.hidden)
+            PlainTextEditor(text: $text)
                 .background(Color.bgPage)
         }
         .frame(width: 720, height: 560)
         .onAppear { text = initial }
+    }
+}
+
+/// Verbatim source editor: a raw NSTextView with every automatic
+/// substitution off. SwiftUI's TextEditor applies macOS smart quotes/dashes,
+/// which silently corrupts YAML frontmatter (that is how the FCAS tldr was
+/// lost) — a source view must never rewrite bytes.
+struct PlainTextEditor: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        let tv = scroll.documentView as! NSTextView
+        tv.isRichText = false
+        tv.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.isContinuousSpellCheckingEnabled = false
+        tv.allowsUndo = true
+        tv.textContainerInset = NSSize(width: 10, height: 10)
+        tv.delegate = context.coordinator
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let tv = scroll.documentView as? NSTextView else { return }
+        if tv.string != text { tv.string = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: PlainTextEditor
+        init(_ parent: PlainTextEditor) { self.parent = parent }
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+        }
     }
 }
