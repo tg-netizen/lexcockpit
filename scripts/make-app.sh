@@ -5,13 +5,22 @@
 # release.yml overrides it with the pushed tag.
 set -euo pipefail
 
-VERSION="${1:-0.24.1}"
+VERSION="${1:-0.24.2}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "── Building release binary…"
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)"
+# UNIVERSAL binary (arm64 + x86_64). The release runner is Apple
+# Silicon while this Mac is Intel — a single-arch build produced an
+# app that macOS refused to launch ("not compatible with your
+# computer"). Universal costs a minute of build time and runs on both.
+echo "── Building release binary (universal: arm64 + x86_64)…"
+if swift build -c release --arch arm64 --arch x86_64; then
+  BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+else
+  echo "   universal build unavailable — falling back to this machine's architecture"
+  swift build -c release
+  BIN="$(swift build -c release --show-bin-path)"
+fi
 
 # Assemble + sign in a PRIVATE temp dir. On iCloud-synced folders (like
 # ~/Desktop) the file provider keeps stamping extended attributes that make
@@ -51,4 +60,5 @@ rm -rf "$ROOT/dist"
 mkdir -p "$ROOT/dist"
 ditto "$APP" "$ROOT/dist/LexCockpit.app"
 
-echo "── Done: $ROOT/dist/LexCockpit.app (version $VERSION, ${IDENTITY:+stable-identity}${IDENTITY:-ad-hoc} signed)"
+ARCHS="$(lipo -archs "$ROOT/dist/LexCockpit.app/Contents/MacOS/LexCockpit" 2>/dev/null || echo unknown)"
+echo "── Done: $ROOT/dist/LexCockpit.app (version $VERSION, ${IDENTITY:+stable-identity}${IDENTITY:-ad-hoc} signed, archs: $ARCHS)"
