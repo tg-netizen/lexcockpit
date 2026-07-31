@@ -943,122 +943,104 @@ struct SettingsSheet: View {
     @State private var mailerliteKey = ""
     @ObservedObject private var canva = CanvaAuth.shared
 
+    /// Preferences sections — icon rail on the left, one pane at a
+    /// time on the right (macOS System Settings pattern). Onboarding
+    /// keeps the old single-scroll flow: a newcomer should see every
+    /// field at once, not hunt through tabs.
+    enum Pane: String, CaseIterable, Identifiable {
+        case accounts, canva, analytics, feeds, about
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .accounts:  return "Accounts"
+            case .canva:     return "Canva"
+            case .analytics: return "Analytics"
+            case .feeds:     return "Feeds"
+            case .about:     return "About"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .accounts:  return "key.fill"
+            case .canva:     return "paintbrush.fill"
+            case .analytics: return "chart.bar.fill"
+            case .feeds:     return "antenna.radiowaves.left.and.right"
+            case .about:     return "info.circle.fill"
+            }
+        }
+    }
+    @State private var pane: Pane = .accounts
+
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    EmptyView()
-            Text(onboarding ? "Welcome to LexCockpit" : "Settings")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.textPrimary)
             if onboarding {
-                Text("One-time setup: paste the keys you have, press Save, then hit each Test button — green means the pipeline works. You can skip anything and add it later via the gear icon.")
-                    .font(.callout).foregroundColor(.textSecondary)
-            }
-            Text("Tokens are stored only in the macOS Keychain — never in files, code or logs.")
-                .font(.callout).foregroundColor(.textSecondary)
-
-            field("Netlify personal access token", text: $netlifyPAT,
-                  hint: "app.netlify.com → User settings → Applications → New access token",
-                  present: Keychain.has(Keychain.netlifyPAT))
-            field("Netlify build hook URL", text: $buildHook,
-                  hint: "Site configuration → Build & deploy → Build hooks (URL embeds a token)",
-                  present: Keychain.has(Keychain.netlifyBuildHook))
-            field("GitHub fine-grained PAT", text: $githubPAT,
-                  hint: "github.com → Settings → Developer settings → Fine-grained tokens (Contents: read/write)",
-                  present: Keychain.has(Keychain.githubPAT))
-            testRow("github", "Test GitHub") { await ConnectionTest.github() }
-            testRow("netlify", "Test Netlify") { await ConnectionTest.netlify(siteId: nil) }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Text("Canva").font(.callout.weight(.semibold))
-                    if canva.connecting {
-                        ProgressView().controlSize(.small)
-                    } else if canva.needsReconnect {
-                        Label("Reconnect needed", systemImage: "exclamationmark.arrow.circlepath")
-                            .font(.caption).foregroundColor(.statusAmber)
-                    } else if canva.isConnected {
-                        Label("Connected as \(canva.displayName ?? "Canva account")",
-                              systemImage: "checkmark.seal.fill")
-                            .font(.caption).foregroundColor(.statusGreen)
-                    } else {
-                        Text("Not connected").font(.caption).foregroundColor(.textSecondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Welcome to LexCockpit")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.textPrimary)
+                        Text("One-time setup: paste the keys you have, press Save, then hit each Test button — green means the pipeline works. You can skip anything and add it later via the gear icon.")
+                            .font(.callout).foregroundColor(.textSecondary)
+                        keychainNote
+                        accountsPane
+                        Divider()
+                        canvaPane
+                        Divider()
+                        analyticsPane
+                        Divider()
+                        feedsPane
                     }
-                    Spacer()
-                    if canva.isConnected && !canva.needsReconnect {
-                        Button("Disconnect") { canva.disconnect() }
-                    } else {
-                        Button(canva.needsReconnect ? "Reconnect Canva" : "Connect Canva") {
-                            if !canvaID.isEmpty { Keychain.set(Keychain.canvaClientID, canvaID); canvaID = "" }
-                            if !canvaSecret.isEmpty { Keychain.set(Keychain.canvaClientSecret, canvaSecret); canvaSecret = "" }
-                            Task { await canva.connect() }
+                    .padding(22)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Pane.allCases) { p in
+                            Button { pane = p } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: p.icon)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(pane == p ? .accentNavy : .textSecondary)
+                                        .frame(width: 18)
+                                    Text(p.title)
+                                        .font(.system(size: 13, weight: pane == p ? .semibold : .regular))
+                                        .foregroundColor(.textPrimary)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(pane == p ? Color.navyTint : .clear)
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .disabled(canva.connecting || (!canva.isConfigured && (canvaID.isEmpty || canvaSecret.isEmpty)))
+                        Spacer()
+                    }
+                    .padding(10)
+                    .frame(width: 172)
+                    .background(Color.bgCard)
+
+                    Divider()
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(pane.title)
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.textPrimary)
+                            switch pane {
+                            case .accounts:  keychainNote; accountsPane
+                            case .canva:     canvaPane
+                            case .analytics: analyticsPane
+                            case .feeds:     feedsPane
+                            case .about:     aboutPane
+                            }
+                        }
+                        .padding(22)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                field("Canva Client ID", text: $canvaID,
-                      hint: "developer.canva.com → Your integrations (redirect: http://127.0.0.1:8976/callback)",
-                      present: Keychain.has(Keychain.canvaClientID))
-                field("Canva Client Secret", text: $canvaSecret,
-                      hint: "Sign-in opens in your default browser — never inside the app.",
-                      present: Keychain.has(Keychain.canvaClientSecret))
-                testRow("canva", "Test Canva") { await ConnectionTest.canva() }
-                if let err = canva.lastError {
-                    Text(err).font(.caption2).foregroundColor(.statusRed)
-                        .textSelection(.enabled)
-                    if canva.invalidScope {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(CanvaAuth.scopeListForCopy, forType: .string)
-                        } label: { Label("Copy scope list", systemImage: "doc.on.doc") }
-                        .controlSize(.small)
-                    }
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Analytics").font(.callout.weight(.semibold))
-                field("Plausible API key", text: $plausibleKey,
-                      hint: "plausible.io → Settings → API keys (read-only stats key)",
-                      present: Keychain.has(Keychain.plausibleKey))
-                field("MailerLite API key", text: $mailerliteKey,
-                      hint: "MailerLite → Integrations → API — also enables Weekly-brief drafts",
-                      present: Keychain.has(Keychain.mailerliteKey))
-                testRow("plausible", "Test Plausible") {
-                    await ConnectionTest.plausible(host: "lexdigestglobal.com")
-                }
-                testRow("mailerlite", "Test MailerLite") { await ConnectionTest.mailerlite() }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Feed base URL (override)").font(.callout.weight(.semibold))
-                TextField(CockpitStore.defaultBase, text: $feedBaseURL)
-                    .textFieldStyle(.roundedBorder)
-                Text("Leave empty for the live site. While the site is password-protected you can serve a local copy (`python3 -m http.server 8899` in the website repo) and use http://localhost:8899/data/")
-                    .font(.caption2).foregroundColor(.textSecondary)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Refresh interval").font(.callout.weight(.semibold))
-                Picker("", selection: $refreshMinutes) {
-                    Text("Manual only").tag(0)
-                    Text("Every 5 min").tag(5)
-                    Text("Every 15 min").tag(15)
-                    Text("Every 30 min").tag(30)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-
-                }
-                .padding(22)
             }
             Divider()
             HStack {
@@ -1071,28 +1053,160 @@ struct SettingsSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Save") {
-                    if !netlifyPAT.isEmpty { Keychain.set(Keychain.netlifyPAT, netlifyPAT) }
-                    if !buildHook.isEmpty { Keychain.set(Keychain.netlifyBuildHook, buildHook) }
-                    if !githubPAT.isEmpty { Keychain.set(Keychain.githubPAT, githubPAT) }
-                    if !plausibleKey.isEmpty { Keychain.set(Keychain.plausibleKey, plausibleKey) }
-                    if !mailerliteKey.isEmpty { Keychain.set(Keychain.mailerliteKey, mailerliteKey) }
-                    plausibleKey = ""; mailerliteKey = ""
-                    netlifyPAT = ""; buildHook = ""; githubPAT = ""
-                    UserDefaults.standard.set(
-                        feedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                        forKey: "feedBaseURL")
-                    UserDefaults.standard.set(refreshMinutes, forKey: "refreshMinutes")
-                    saved = true
-                }
+                Button("Save") { saveAll() }
                 .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
             .background(Color.bgCard)
         }
-        .frame(width: 560, height: 640)
+        .frame(width: onboarding ? 560 : 720, height: 640)
         .sheet(isPresented: $showDiagnostics) { DiagnosticsSheet() }
+    }
+
+    private func saveAll() {
+        if !netlifyPAT.isEmpty { Keychain.set(Keychain.netlifyPAT, netlifyPAT) }
+        if !buildHook.isEmpty { Keychain.set(Keychain.netlifyBuildHook, buildHook) }
+        if !githubPAT.isEmpty { Keychain.set(Keychain.githubPAT, githubPAT) }
+        if !plausibleKey.isEmpty { Keychain.set(Keychain.plausibleKey, plausibleKey) }
+        if !mailerliteKey.isEmpty { Keychain.set(Keychain.mailerliteKey, mailerliteKey) }
+        plausibleKey = ""; mailerliteKey = ""
+        netlifyPAT = ""; buildHook = ""; githubPAT = ""
+        UserDefaults.standard.set(
+            feedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            forKey: "feedBaseURL")
+        UserDefaults.standard.set(refreshMinutes, forKey: "refreshMinutes")
+        saved = true
+    }
+
+    private var keychainNote: some View {
+        Text("Tokens are stored only in the macOS Keychain — never in files, code or logs.")
+            .font(.callout).foregroundColor(.textSecondary)
+    }
+
+    @ViewBuilder private var accountsPane: some View {
+        field("Netlify personal access token", text: $netlifyPAT,
+              hint: "app.netlify.com → User settings → Applications → New access token",
+              present: Keychain.has(Keychain.netlifyPAT))
+        field("Netlify build hook URL", text: $buildHook,
+              hint: "Site configuration → Build & deploy → Build hooks (URL embeds a token)",
+              present: Keychain.has(Keychain.netlifyBuildHook))
+        field("GitHub fine-grained PAT", text: $githubPAT,
+              hint: "github.com → Settings → Developer settings → Fine-grained tokens (Contents: read/write)",
+              present: Keychain.has(Keychain.githubPAT))
+        testRow("github", "Test GitHub") { await ConnectionTest.github() }
+        testRow("netlify", "Test Netlify") { await ConnectionTest.netlify(siteId: nil) }
+    }
+
+    @ViewBuilder private var canvaPane: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Canva").font(.callout.weight(.semibold))
+                if canva.connecting {
+                    ProgressView().controlSize(.small)
+                } else if canva.needsReconnect {
+                    Label("Reconnect needed", systemImage: "exclamationmark.arrow.circlepath")
+                        .font(.caption).foregroundColor(.statusAmber)
+                } else if canva.isConnected {
+                    Label("Connected as \(canva.displayName ?? "Canva account")",
+                          systemImage: "checkmark.seal.fill")
+                        .font(.caption).foregroundColor(.statusGreen)
+                } else {
+                    Text("Not connected").font(.caption).foregroundColor(.textSecondary)
+                }
+                Spacer()
+                if canva.isConnected && !canva.needsReconnect {
+                    Button("Disconnect") { canva.disconnect() }
+                } else {
+                    Button(canva.needsReconnect ? "Reconnect Canva" : "Connect Canva") {
+                        if !canvaID.isEmpty { Keychain.set(Keychain.canvaClientID, canvaID); canvaID = "" }
+                        if !canvaSecret.isEmpty { Keychain.set(Keychain.canvaClientSecret, canvaSecret); canvaSecret = "" }
+                        Task { await canva.connect() }
+                    }
+                    .disabled(canva.connecting || (!canva.isConfigured && (canvaID.isEmpty || canvaSecret.isEmpty)))
+                }
+            }
+            field("Canva Client ID", text: $canvaID,
+                  hint: "developer.canva.com → Your integrations (redirect: http://127.0.0.1:8976/callback)",
+                  present: Keychain.has(Keychain.canvaClientID))
+            field("Canva Client Secret", text: $canvaSecret,
+                  hint: "Sign-in opens in your default browser — never inside the app.",
+                  present: Keychain.has(Keychain.canvaClientSecret))
+            testRow("canva", "Test Canva") { await ConnectionTest.canva() }
+            if let err = canva.lastError {
+                Text(err).font(.caption2).foregroundColor(.statusRed)
+                    .textSelection(.enabled)
+                if canva.invalidScope {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(CanvaAuth.scopeListForCopy, forType: .string)
+                    } label: { Label("Copy scope list", systemImage: "doc.on.doc") }
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var analyticsPane: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            field("Plausible API key", text: $plausibleKey,
+                  hint: "plausible.io → Settings → API keys (read-only stats key)",
+                  present: Keychain.has(Keychain.plausibleKey))
+            field("MailerLite API key", text: $mailerliteKey,
+                  hint: "MailerLite → Integrations → API — also enables Weekly-brief drafts",
+                  present: Keychain.has(Keychain.mailerliteKey))
+            testRow("plausible", "Test Plausible") {
+                await ConnectionTest.plausible(host: "lexdigestglobal.com")
+            }
+            testRow("mailerlite", "Test MailerLite") { await ConnectionTest.mailerlite() }
+        }
+    }
+
+    @ViewBuilder private var feedsPane: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Feed base URL (override)").font(.callout.weight(.semibold))
+            TextField(CockpitStore.defaultBase, text: $feedBaseURL)
+                .textFieldStyle(.roundedBorder)
+            Text("Leave empty for the live site. While the site is password-protected you can serve a local copy (`python3 -m http.server 8899` in the website repo) and use http://localhost:8899/data/")
+                .font(.caption2).foregroundColor(.textSecondary)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Refresh interval").font(.callout.weight(.semibold))
+            Picker("", selection: $refreshMinutes) {
+                Text("Manual only").tag(0)
+                Text("Every 5 min").tag(5)
+                Text("Every 15 min").tag(15)
+                Text("Every 30 min").tag(30)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+    }
+
+    @ViewBuilder private var aboutPane: some View {
+        HStack(spacing: 14) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable().frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("LexCockpit").font(.system(size: 17, weight: .bold, design: .serif))
+                    .foregroundColor(.textPrimary)
+                Text("Version \(AppVersion.display)")
+                    .font(.callout).foregroundColor(.textSecondary)
+            }
+            Spacer()
+        }
+        Text("Editorial cockpit for LexDigestGlobal — write, plan, publish, and watch the regulatory feeds. Tokens live in the macOS Keychain; article bytes are protected by the block vault.")
+            .font(.callout).foregroundColor(.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        if let url = URL(string: "https://github.com/tg-netizen/lexcockpit/releases") {
+            Link("Releases & changelog", destination: url).font(.callout)
+        }
+        Button("Show what's new") {
+            UserDefaults.standard.removeObject(forKey: "lastSeenVersion")
+        }
+        .controlSize(.small)
+        .help("The what's-new window appears again on the next launch")
     }
 
     private func testRow(_ id: String, _ label: String,
