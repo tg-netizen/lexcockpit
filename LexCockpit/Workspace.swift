@@ -250,6 +250,7 @@ struct OverviewTabView: View {
     private var scheduled: [ContentEntry] { model.contentEntries.filter { !$0.scheduled.isEmpty } }
     private var drafts: [ContentEntry] { model.contentEntries.filter { $0.isDraft && $0.scheduled.isEmpty } }
     @ObservedObject private var radar = RadarStore.shared
+    @State private var selected: ContentEntry?
 
     /// Total words across all articles, compacted ("12.4k") past 10k.
     private var wordsWritten: String {
@@ -259,6 +260,23 @@ struct OverviewTabView: View {
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            list
+            if let sel = selected {
+                Divider()
+                ArticleDetailRail(entry: sel, site: site,
+                                  openEditor: { onOpen(sel) },
+                                  close: { withAnimation(.spring(duration: 0.25)) { selected = nil } })
+                    .frame(width: 330)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .onChange(of: model.contentEntries) { _, new in
+            if let s = selected { selected = new.first { $0.id == s.id } }
+        }
+    }
+
+    private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 LazyVGrid(columns: grid(min: 150), spacing: 14) {
@@ -306,7 +324,9 @@ struct OverviewTabView: View {
                     LazyVGrid(columns: grid(min: 320), spacing: 14) {
                         ForEach(model.contentEntries) { entry in
                             Button {
-                                onOpen(entry)
+                                withAnimation(.spring(duration: 0.25)) {
+                                    selected = (selected?.id == entry.id) ? nil : entry
+                                }
                             } label: {
                                 Card {
                                     VStack(alignment: .leading, spacing: 6) {
@@ -337,14 +357,19 @@ struct OverviewTabView: View {
                                                         .font(.caption)
                                                 }
                                             }
-                                            Label("Edit", systemImage: "square.and.pencil")
+                                            Label("Details", systemImage: "sidebar.right")
                                                 .font(.caption).foregroundColor(.accentNavy)
                                         }
                                     }
                                 }
                             }
                             .buttonStyle(.plain)
-                            .help("Open in the editor")
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.accentNavy.opacity(selected?.id == entry.id ? 0.55 : 0),
+                                            lineWidth: 1.5)
+                            )
+                            .help("Show details — the panel has the editor button")
                         }
                     }
                 }
@@ -363,6 +388,140 @@ struct OverviewTabView: View {
             return (e.status.uppercased(), .textSecondary)
         }()
         return Pill(text: text, color: color)
+    }
+}
+
+// MARK: - Article detail rail (Branch-style context panel)
+
+/// Right-hand context panel: click an article in Overview and its
+/// details slide in WITHOUT leaving the list — status, dates, an
+/// honest readiness checklist, and the real actions. The pattern from
+/// the Branch "PR details" shot (Collect UI research).
+struct ArticleDetailRail: View {
+    let entry: ContentEntry
+    let site: SiteProject
+    var openEditor: () -> Void
+    var close: () -> Void
+
+    private var statusColor: Color {
+        if entry.status == "published" { return .stApplied }
+        if !entry.scheduled.isEmpty { return .statusAmber }
+        return .textSecondary
+    }
+    private var statusLine: String {
+        if entry.status == "published" { return "Published" }
+        if !entry.scheduled.isEmpty { return "Scheduled · \(prettyDate(entry.scheduled))" }
+        return "Draft" }
+
+    private var checks: [(Bool, String)] {
+        [(!entry.title.isEmpty, "Title set"),
+         (entry.words >= 300, "At least 300 words (\(entry.words))"),
+         (!entry.topic.isEmpty, "Topic assigned"),
+         (!entry.type.isEmpty, "Article type chosen")]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Circle().fill(statusColor).frame(width: 8, height: 8)
+                Text(statusLine)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(statusColor)
+                Spacer()
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Close details (Esc)")
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.bottom, 12)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(entry.title.isEmpty ? entry.name : entry.title)
+                        .font(.system(size: 19, weight: .bold, design: .serif))
+                        .foregroundColor(.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !entry.preview.isEmpty {
+                        Text(entry.preview)
+                            .font(.system(size: 12.5))
+                            .foregroundColor(.textSecondary)
+                            .lineLimit(3)
+                    }
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        metaRow("Date", entry.date.isEmpty ? "–" : prettyDate(entry.date))
+                        if !entry.scheduled.isEmpty { metaRow("Goes live", prettyDate(entry.scheduled)) }
+                        metaRow("Words", "\(entry.words)")
+                        if !entry.topic.isEmpty { metaRow("Topic", entry.topic.capitalized) }
+                        if !entry.type.isEmpty { metaRow("Type", entry.type.capitalized) }
+                        metaRow("File", entry.name)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("READY TO PUBLISH?")
+                            .font(.system(size: 10.5, weight: .semibold)).tracking(0.6)
+                            .foregroundColor(.textSecondary)
+                        ForEach(checks, id: \.1) { ok, label in
+                            HStack(spacing: 6) {
+                                Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(ok ? .stApplied : .textSecondary)
+                                Text(label).font(.system(size: 12.5))
+                                    .foregroundColor(.textPrimary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(spacing: 8) {
+                Button(action: openEditor) {
+                    Label("Open in editor", systemImage: "square.and.pencil")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.accentNavy)
+                .controlSize(.large)
+
+                HStack(spacing: 12) {
+                    if let live = entry.liveURL(site: site.url), let url = URL(string: live) {
+                        Link(destination: url) {
+                            Label("Live", systemImage: "arrow.up.right")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                    }
+                    if let repo = site.repo,
+                       let url = URL(string: "https://github.com/\(repo)/blob/\(site.default_branch ?? "main")/\(entry.path)") {
+                        Link(destination: url) {
+                            Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.bgCard)
+    }
+
+    private func metaRow(_ key: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(key)
+                .font(.system(size: 12)).foregroundColor(.textSecondary)
+                .frame(width: 74, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12.5, weight: .medium)).foregroundColor(.textPrimary)
+            Spacer(minLength: 0)
+        }
     }
 }
 
