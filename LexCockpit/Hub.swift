@@ -49,14 +49,7 @@ struct ProjectHubView: View {
                             Text(greeting)
                                 .font(.system(size: 28, weight: .bold))
                                 .foregroundColor(.textPrimary)
-                            Text("BETA \(AppVersion.current)")
-                                .font(.system(size: 10, weight: .bold))
-                                .tracking(0.8)
-                                .foregroundColor(.accentNavy)
-                                .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(Capsule().fill(Color.navyTint))
-                                .overlay(Capsule().stroke(Color.cardBorder, lineWidth: 1))
-                                .help("You are running the LexCockpit beta channel")
+                            BetaBadge()
                         }
                         Text(todayLine)
                             .font(.system(size: 14))
@@ -461,5 +454,22 @@ struct AddProjectSheet: View {
             Text(label).font(.caption.weight(.semibold)).foregroundColor(.textSecondary)
             TextField(placeholder, text: binding).textFieldStyle(.roundedBorder)
         }
+    }
+}
+
+// MARK: - Beta badge (Home greeting + design previews)
+
+/// Small capsule marking the beta channel. Version text comes from the
+/// bundle, so tagged releases show their real number automatically.
+struct BetaBadge: View {
+    var body: some View {
+        Text("BETA \(AppVersion.current)")
+            .font(.system(size: 10, weight: .bold))
+            .tracking(0.8)
+            .foregroundColor(.accentNavy)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(Color.navyTint))
+            .overlay(Capsule().stroke(Color.cardBorder, lineWidth: 1))
+            .help("You are running the LexCockpit beta channel")
     }
 }
