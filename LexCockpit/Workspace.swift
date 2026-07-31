@@ -480,8 +480,6 @@ struct RhythmGrid: View {
             if mk.scheduled > 0 { return .statusAmber }
             return .cardBorder.opacity(0.45)
         }()
-        let f = DateFormatter()
-        let _ = f.dateFormat = "d MMM"
         RoundedRectangle(cornerRadius: 2.5)
             .fill(color)
             .frame(width: 10, height: 10)
@@ -489,11 +487,19 @@ struct RhythmGrid: View {
                 RoundedRectangle(cornerRadius: 2.5)
                     .stroke(Color.accentNavy, lineWidth: isToday ? 1.2 : 0)
             )
-            .help({
-                let n = (mark?.published ?? 0) + (mark?.scheduled ?? 0)
-                return n > 0 ? "\(n) article\(n == 1 ? "" : "s") · \(f.string(from: date))"
-                             : f.string(from: date)
-            }())
+            .help(tooltip(for: date, mark: mark))
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM"
+        return f
+    }()
+
+    private func tooltip(for date: Date, mark: DayMark?) -> String {
+        let day = Self.dayFormatter.string(from: date)
+        let n = (mark?.published ?? 0) + (mark?.scheduled ?? 0)
+        return n > 0 ? "\(n) article\(n == 1 ? "" : "s") · \(day)" : day
     }
 }
 

@@ -11,11 +11,29 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    # macos-15 carries Xcode 16 — the toolchain the app is developed
+    # against. The first release attempt died on macos-14 in 26s, too
+    # fast for a real compile, so the steps below print the toolchain
+    # and split build from packaging: whatever fails next names itself.
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Build LexCockpit.app
+      - name: Toolchain in use
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          LATEST="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Compile (release configuration)
+        run: swift build -c release
+
+      - name: Verify the test batteries
+        run: swift run LexCockpit --selftest
+
+      - name: Assemble LexCockpit.app
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           bash scripts/make-app.sh "$VERSION"
