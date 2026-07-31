@@ -24,7 +24,8 @@ struct WelcomeSheet: View {
         "Big-number stat tiles and the serif Home greeting",
         "Article context rail with a readiness checklist",
         "Publishing rhythm — 12 weeks of dots, plan included",
-        "This welcome window (says hello once per version)"
+        "Settings as a real preferences window with an icon rail",
+        "Library and ⌘K grouped by Today / Yesterday / Earlier"
     ]
 
     var body: some View {
@@ -79,7 +80,7 @@ struct WelcomeSheet: View {
             .padding(.horizontal, 40)
         }
         .overlay(alignment: .topLeading)     { tile("\(store.sites.count) PROJECT\(store.sites.count == 1 ? "" : "S")").padding(14) }
-        .overlay(alignment: .topTrailing)    { tile("45 SELFTESTS\nGREEN").padding(14) }
+        .overlay(alignment: .topTrailing)    { tile("54 SELFTESTS\nGREEN").padding(14) }
         .overlay(alignment: .bottomLeading)  { tile("AUTO-DATA\nMON + THU").padding(14) }
         .overlay(alignment: .bottomTrailing) { tile("BLOCK VAULT\nBYTE-SAFE").padding(14) }
         .frame(width: 620, height: 470)

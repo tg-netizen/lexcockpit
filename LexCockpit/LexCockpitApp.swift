@@ -548,6 +548,10 @@ struct QuickSwitcherView: View {
         let title: String
         let subtitle: String
         let icon: String
+        /// Extra text matched by the fuzzy filter but not displayed —
+        /// keeps filenames searchable once the subtitle shows the
+        /// article's date bucket instead.
+        var searchExtra: String = ""
         let action: () -> Void
     }
 
@@ -566,13 +570,19 @@ struct QuickSwitcherView: View {
                             icon: "globe", action: { navigate(.site(site.id)) }))
             for entry in WorkspaceModel.shared(for: site).contentEntries {
                 out.append(Item(id: entry.path, title: entry.title,
-                                subtitle: entry.name, icon: "doc.text",
+                                subtitle: DateBucket.label(for: entry.scheduled.isEmpty
+                                                           ? entry.date : entry.scheduled),
+                                icon: "doc.text",
+                                searchExtra: entry.name,
                                 action: { openArticle(site, entry.path) }))
             }
         }
         guard !query.isEmpty else { return out }
         let q = query.lowercased()
-        return out.filter { fuzzy(q, in: $0.title.lowercased()) || fuzzy(q, in: $0.subtitle.lowercased()) }
+        return out.filter {
+            fuzzy(q, in: $0.title.lowercased()) || fuzzy(q, in: $0.subtitle.lowercased())
+                || (!$0.searchExtra.isEmpty && fuzzy(q, in: $0.searchExtra.lowercased()))
+        }
     }
 
     private func fuzzy(_ needle: String, in hay: String) -> Bool {

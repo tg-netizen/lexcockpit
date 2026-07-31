@@ -27,6 +27,52 @@ struct ContentEntry: Identifiable, Hashable {
     }
 }
 
+// MARK: - Date buckets (Today / Yesterday / … — shared by library + ⌘K)
+
+/// Groups entries by how recent they are, newest bucket first. Uses the
+/// scheduled date when one is set (that's when the piece matters), else
+/// the article date. Entries with an unparsable date land in "Undated"
+/// rather than being silently dropped.
+enum DateBucket {
+    static func label(for iso: String) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        guard let date = f.date(from: String(iso.prefix(10))) else { return "Undated" }
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: date)
+        let today = cal.startOfDay(for: Date())
+        let days = cal.dateComponents([.day], from: day, to: today).day ?? 0
+        if days < 0 { return "Upcoming" }
+        if days == 0 { return "Today" }
+        if days == 1 { return "Yesterday" }
+        if days <= 7 { return "This week" }
+        if days <= 30 { return "This month" }
+        let year = cal.component(.year, from: date)
+        return year == cal.component(.year, from: today) ? "Earlier this year" : "\(year)"
+    }
+
+    private static let order = ["Upcoming", "Today", "Yesterday", "This week",
+                                "This month", "Earlier this year"]
+
+    /// Bucketed entries in display order; keeps each bucket's own order.
+    static func group(_ entries: [ContentEntry]) -> [(String, [ContentEntry])] {
+        var buckets: [String: [ContentEntry]] = [:]
+        for e in entries {
+            let key = label(for: e.scheduled.isEmpty ? e.date : e.scheduled)
+            buckets[key, default: []].append(e)
+        }
+        return buckets.keys.sorted { a, b in
+            let ia = order.firstIndex(of: a), ib = order.firstIndex(of: b)
+            switch (ia, ib) {
+            case let (x?, y?): return x < y
+            case (_?, nil):    return true          // named buckets before years
+            case (nil, _?):    return false
+            default:           return a > b          // years descending, "Undated" last-ish
+            }
+        }.map { ($0, buckets[$0] ?? []) }
+    }
+}
+
 // MARK: - Open document
 
 /// One open markdown document. Frontmatter is edited through the structured
@@ -637,9 +683,25 @@ struct ContentLibraryView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(filtered) { entry in
-                            libraryRow(entry)
+                    LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                        ForEach(DateBucket.group(filtered), id: \.0) { bucket, rows in
+                            Section {
+                                ForEach(rows) { entry in
+                                    libraryRow(entry)
+                                }
+                            } header: {
+                                HStack {
+                                    Text(bucket.uppercased())
+                                        .font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                                        .foregroundColor(.textSecondary)
+                                    Spacer()
+                                    Text("\(rows.count)")
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundColor(.textSecondary)
+                                }
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .background(Color.bgCard)
+                            }
                         }
                     }
                     .padding(6)

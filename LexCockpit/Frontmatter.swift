@@ -687,5 +687,31 @@ func runFrontmatterSelfTests() -> Bool {
     expect(newArticleTemplate(title: "Test Piece", author: "") == newArticleTemplate(title: "Test Piece", author: "", template: .blank),
            "blank template unchanged (backwards compatible)")
 
+    // ── Date buckets (library + ⌘K grouping) ──────────────────────
+    let iso = DateFormatter()
+    iso.dateFormat = "yyyy-MM-dd"
+    let cal = Calendar.current
+    func isoDay(_ offset: Int) -> String {
+        iso.string(from: cal.date(byAdding: .day, value: offset, to: Date())!)
+    }
+    expect(DateBucket.label(for: isoDay(0)) == "Today", "date bucket: today")
+    expect(DateBucket.label(for: isoDay(-1)) == "Yesterday", "date bucket: yesterday")
+    expect(DateBucket.label(for: isoDay(-4)) == "This week", "date bucket: this week")
+    expect(DateBucket.label(for: isoDay(-20)) == "This month", "date bucket: this month")
+    expect(DateBucket.label(for: isoDay(3)) == "Upcoming", "date bucket: scheduled ahead")
+    expect(DateBucket.label(for: "2019-04-02") == "2019", "date bucket: past years keep their year")
+    expect(DateBucket.label(for: "") == "Undated", "date bucket: unparsable date is not dropped")
+
+    let mixed = [
+        ContentEntry(path: "a", name: "a.md", title: "A", date: isoDay(-1), status: "published"),
+        ContentEntry(path: "b", name: "b.md", title: "B", date: isoDay(0), status: "published"),
+        ContentEntry(path: "c", name: "c.md", title: "C", date: isoDay(-40), status: "draft")
+    ]
+    let grouped = DateBucket.group(mixed)
+    expect(grouped.first?.0 == "Today" && grouped.count == 3,
+           "date grouping orders newest bucket first")
+    expect(grouped.reduce(0) { $0 + $1.1.count } == mixed.count,
+           "date grouping keeps every entry")
+
     return ok
 }
