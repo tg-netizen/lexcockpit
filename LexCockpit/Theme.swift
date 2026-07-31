@@ -42,6 +42,10 @@ extension Color {
     // Small warm accent (dirty dots, gold pills) — kept from the site brand
     static let brandGold  = dyn("#C9B58C", "#C9B58C")
 
+    // Warm paper glow at the top of the Home page (Lemon-style) —
+    // cream in light mode, a whisper of navy in dark.
+    static let pageGlow = dyn("#F5F0E6", "#20232B")
+
     // Back-compat aliases so existing views pick up the new system wholesale
     static let brandNavy  = accentNavy
     static let brandCream = bgPage
@@ -123,25 +127,38 @@ struct DetailHeader: View {
 
 // MARK: - KPI tile
 
-/// White card, big navy number, uppercase gray label — like Pro's KPI tiles.
+/// Big-number stat tile: the number carries the weight (primary ink,
+/// tabular digits), the accent lives only in the small icon — the
+/// dashboard pattern from the Branch shot (Collect UI research).
 struct StatTile: View {
     let value: String
     let label: String
     var accent: Color = .accentNavy
+    var icon: String? = nil
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(value)
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundColor(accent)
-                Text(label.uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.5)
-                    .foregroundColor(.textSecondary)
+                    .font(.system(size: 34, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundColor(.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                HStack(spacing: 5) {
+                    if let icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(accent)
+                    }
+                    Text(label.uppercased())
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(0.5)
+                        .foregroundColor(.textSecondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minHeight: 86)
+        .frame(minHeight: 96)
     }
 }
 

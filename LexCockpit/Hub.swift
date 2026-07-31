@@ -25,12 +25,21 @@ struct ProjectHubView: View {
     var navigate: (SidebarSelection) -> Void
     @State private var showAdd = false
 
+    /// First name from the macOS account (real data, zero setup);
+    /// falls back to the plain greeting when the account has no name.
+    private var firstName: String? {
+        let first = NSFullUserName().split(separator: " ").first.map(String.init)
+        return (first?.isEmpty == false) ? first : nil
+    }
+
     private var greeting: String {
+        let base: String
         switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<12:  return "Good morning"
-        case 12..<18: return "Good afternoon"
-        default:      return "Good evening"
+        case 5..<12:  base = "Good morning"
+        case 12..<18: base = "Good afternoon"
+        default:      base = "Good evening"
         }
+        return firstName.map { "\(base), \($0)" } ?? base
     }
 
     private var todayLine: String {
@@ -47,7 +56,7 @@ struct ProjectHubView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 10) {
                             Text(greeting)
-                                .font(.system(size: 28, weight: .bold))
+                                .font(.system(size: 30, weight: .bold, design: .serif))
                                 .foregroundColor(.textPrimary)
                             BetaBadge()
                         }
@@ -76,7 +85,13 @@ struct ProjectHubView: View {
             }
             .padding(28)
         }
-        .background(Color.bgPage)
+        .background(
+            // Warm paper glow fading into the page — Lemon-style Home.
+            LinearGradient(stops: [
+                .init(color: .pageGlow, location: 0),
+                .init(color: .bgPage,  location: 0.38)
+            ], startPoint: .top, endPoint: .bottom)
+        )
         .sheet(isPresented: $showAdd) { AddProjectSheet() }
     }
 

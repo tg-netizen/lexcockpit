@@ -249,14 +249,30 @@ struct OverviewTabView: View {
     private var published: [ContentEntry] { model.contentEntries.filter { $0.status == "published" } }
     private var scheduled: [ContentEntry] { model.contentEntries.filter { !$0.scheduled.isEmpty } }
     private var drafts: [ContentEntry] { model.contentEntries.filter { $0.isDraft && $0.scheduled.isEmpty } }
+    @ObservedObject private var radar = RadarStore.shared
+
+    /// Total words across all articles, compacted ("12.4k") past 10k.
+    private var wordsWritten: String {
+        let total = model.contentEntries.reduce(0) { $0 + $1.words }
+        if total >= 10_000 { return String(format: "%.1fk", Double(total) / 1000) }
+        return "\(total)"
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                LazyVGrid(columns: grid(min: 160), spacing: 14) {
-                    StatTile(value: "\(published.count)", label: "Published", accent: .stApplied)
-                    StatTile(value: "\(scheduled.count)", label: "Scheduled", accent: .brandGold)
-                    StatTile(value: "\(drafts.count)", label: "In draft", accent: .brandNavy)
+                LazyVGrid(columns: grid(min: 150), spacing: 14) {
+                    StatTile(value: "\(published.count)", label: "Published",
+                             accent: .stApplied, icon: "checkmark.circle")
+                    StatTile(value: "\(scheduled.count)", label: "Scheduled",
+                             accent: .brandGold, icon: "calendar")
+                    StatTile(value: "\(drafts.count)", label: "In draft",
+                             accent: .brandNavy, icon: "square.and.pencil")
+                    StatTile(value: wordsWritten, label: "Words written",
+                             accent: .accentNavy, icon: "text.alignleft")
+                    StatTile(value: "\(radar.unseenCount)", label: "Radar to review",
+                             accent: radar.unseenCount > 0 ? .statusAmber : .stApplied,
+                             icon: "dot.radiowaves.left.and.right")
                 }
 
                 HStack {

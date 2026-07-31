@@ -65,6 +65,17 @@ private struct Swatch: View {
     .background(Color.bgPage)
 }
 
+#Preview("Stat-Kacheln (Branch-Stil)") {
+    HStack(spacing: 14) {
+        StatTile(value: "12", label: "Published", accent: .stApplied, icon: "checkmark.circle")
+        StatTile(value: "3", label: "Scheduled", accent: .brandGold, icon: "calendar")
+        StatTile(value: "14.2k", label: "Words written", accent: .accentNavy, icon: "text.alignleft")
+    }
+    .padding(24)
+    .frame(width: 560)
+    .background(Color.bgPage)
+}
+
 #Preview("Beta-Badge") {
     VStack(spacing: 16) {
         HStack(spacing: 10) {
