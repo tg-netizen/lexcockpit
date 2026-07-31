@@ -293,6 +293,25 @@ struct OverviewTabView: View {
                              icon: "dot.radiowaves.left.and.right")
                 }
 
+                Card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("PUBLISHING RHYTHM · 12 WEEKS")
+                                .font(.system(size: 10.5, weight: .semibold)).tracking(0.6)
+                                .foregroundColor(.textSecondary)
+                            Spacer()
+                            HStack(spacing: 10) {
+                                Label("Published", systemImage: "square.fill")
+                                    .font(.system(size: 10)).foregroundColor(.stApplied)
+                                Label("Scheduled", systemImage: "square.fill")
+                                    .font(.system(size: 10)).foregroundColor(.statusAmber)
+                            }
+                            .labelStyle(.titleAndIcon)
+                        }
+                        RhythmGrid(entries: model.contentEntries)
+                    }
+                }
+
                 HStack {
                     Text("Editorial pipeline")
                         .font(.system(size: 18, weight: .bold))
@@ -388,6 +407,93 @@ struct OverviewTabView: View {
             return (e.status.uppercased(), .textSecondary)
         }()
         return Pill(text: text, color: color)
+    }
+}
+
+// MARK: - Publishing rhythm (GitHub-style dot matrix)
+
+/// Twelve Monday-first weeks — nine back, three ahead — one dot per
+/// day: green = published articles, amber = scheduled ones, so the
+/// plan ahead is visible next to the track record. Every dot comes
+/// from real entry dates; empty stays empty.
+struct RhythmGrid: View {
+    let entries: [ContentEntry]
+
+    private static let day: TimeInterval = 86_400
+    private var cal: Calendar {
+        var c = Calendar(identifier: .iso8601)
+        c.firstWeekday = 2
+        return c
+    }
+
+    private struct DayMark { var published = 0; var scheduled = 0 }
+
+    private var marks: [Date: DayMark] {
+        var out: [Date: DayMark] = [:]
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        for e in entries {
+            if e.status == "published", let d = f.date(from: String(e.date.prefix(10))) {
+                out[cal.startOfDay(for: d), default: DayMark()].published += 1
+            }
+            if !e.scheduled.isEmpty, let d = f.date(from: String(e.scheduled.prefix(10))) {
+                out[cal.startOfDay(for: d), default: DayMark()].scheduled += 1
+            }
+        }
+        return out
+    }
+
+    private var weekStarts: [Date] {
+        let today = cal.startOfDay(for: Date())
+        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
+        guard let thisWeek = cal.date(from: comps) else { return [] }
+        return (-8...3).compactMap { cal.date(byAdding: .weekOfYear, value: $0, to: thisWeek) }
+    }
+
+    var body: some View {
+        let m = marks
+        let today = cal.startOfDay(for: Date())
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .trailing, spacing: 3) {
+                ForEach(["Mon", "", "Wed", "", "Fri", "", ""], id: \.self) { l in
+                    Text(l).font(.system(size: 8.5)).foregroundColor(.textSecondary)
+                        .frame(height: 10)
+                }
+            }
+            ForEach(weekStarts, id: \.self) { week in
+                VStack(spacing: 3) {
+                    ForEach(0..<7, id: \.self) { dow in
+                        let date = week.addingTimeInterval(Double(dow) * Self.day)
+                        cell(for: date, mark: m[date], isToday: date == today)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cell(for date: Date, mark: DayMark?, isToday: Bool) -> some View {
+        let color: Color = {
+            guard let mk = mark else { return .cardBorder.opacity(0.45) }
+            if mk.published > 0 { return .stApplied.opacity(mk.published > 1 ? 1 : 0.75) }
+            if mk.scheduled > 0 { return .statusAmber }
+            return .cardBorder.opacity(0.45)
+        }()
+        let f = DateFormatter()
+        let _ = f.dateFormat = "d MMM"
+        RoundedRectangle(cornerRadius: 2.5)
+            .fill(color)
+            .frame(width: 10, height: 10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 2.5)
+                    .stroke(Color.accentNavy, lineWidth: isToday ? 1.2 : 0)
+            )
+            .help({
+                let n = (mark?.published ?? 0) + (mark?.scheduled ?? 0)
+                return n > 0 ? "\(n) article\(n == 1 ? "" : "s") · \(f.string(from: date))"
+                             : f.string(from: date)
+            }())
     }
 }
 
