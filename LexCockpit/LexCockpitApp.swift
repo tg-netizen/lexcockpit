@@ -229,6 +229,8 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showSwitcher = false
     @State private var showOnboarding = false
+    @State private var showWelcome = false
+    @State private var welcomeIsFirstRun = false
     @State private var columns = NavigationSplitViewVisibility.automatic
     @Environment(\.openWindow) private var openWindow
 
@@ -313,9 +315,15 @@ struct ContentView: View {
             if !UserDefaults.standard.bool(forKey: "onboardedV1"),
                !Keychain.has(Keychain.githubPAT) {
                 showOnboarding = true
+            } else if UserDefaults.standard.string(forKey: "lastSeenVersion") != AppVersion.current {
+                // Once per version: welcome on the first launch ever,
+                // "What's new" after each update. Token onboarding wins.
+                welcomeIsFirstRun = UserDefaults.standard.string(forKey: "lastSeenVersion") == nil
+                showWelcome = true
             }
         }
         .sheet(isPresented: $showOnboarding) { SettingsSheet(onboarding: true) }
+        .sheet(isPresented: $showWelcome) { WelcomeSheet(firstRun: welcomeIsFirstRun) }
         .task {
             restoreSession()                       // instant — local state only
             await store.loadAll()
