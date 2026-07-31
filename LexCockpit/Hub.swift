@@ -45,9 +45,19 @@ struct ProjectHubView: View {
                 // ── Left: greeting + projects ──
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(greeting)
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(.textPrimary)
+                        HStack(spacing: 10) {
+                            Text(greeting)
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundColor(.textPrimary)
+                            Text("BETA \(AppVersion.current)")
+                                .font(.system(size: 10, weight: .bold))
+                                .tracking(0.8)
+                                .foregroundColor(.accentNavy)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Capsule().fill(Color.navyTint))
+                                .overlay(Capsule().stroke(Color.cardBorder, lineWidth: 1))
+                                .help("You are running the LexCockpit beta channel")
+                        }
                         Text(todayLine)
                             .font(.system(size: 14))
                             .foregroundColor(.textSecondary)

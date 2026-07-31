@@ -1,9 +1,11 @@
 #!/bin/bash
 # Assemble a distributable LexCockpit.app from the SwiftPM build.
-# Usage: bash scripts/make-app.sh [version]   (default 0.2.0)
+# Usage: bash scripts/make-app.sh [version]
+# Keep the default in sync with AppVersion.fallback (UpdateCheck.swift);
+# release.yml overrides it with the pushed tag.
 set -euo pipefail
 
-VERSION="${1:-0.7.0}"
+VERSION="${1:-0.18.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -49,4 +51,4 @@ rm -rf "$ROOT/dist"
 mkdir -p "$ROOT/dist"
 ditto "$APP" "$ROOT/dist/LexCockpit.app"
 
-echo "── Done: $ROOT/dist/LexCockpit.app (version $VERSION, ad-hoc signed)"
+echo "── Done: $ROOT/dist/LexCockpit.app (version $VERSION, ${IDENTITY:+stable-identity}${IDENTITY:-ad-hoc} signed)"

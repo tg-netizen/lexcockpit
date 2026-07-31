@@ -5,10 +5,14 @@ import AppKit
 /// The app's version: from the bundle when running as LexCockpit.app,
 /// falling back to this constant under bare `swift run`.
 enum AppVersion {
-    static let fallback = "0.14.0"
+    static let fallback = "0.18.0"
+    /// Release channel label shown in the UI (badge on Home, Settings
+    /// footer). Purely cosmetic — the updater compares bare numbers.
+    static let channel = "Beta"
     static var current: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? fallback
     }
+    static var display: String { "\(current) · \(channel)" }
 }
 
 /// Checks the public GitHub Releases API on launch (no token needed) and

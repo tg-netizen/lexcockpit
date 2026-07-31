@@ -436,7 +436,7 @@ struct ContentView: View {
                 }
 
                 Spacer(minLength: 20)
-                Text("v\(AppVersion.current)")
+                Text("v\(AppVersion.display)")
                     .font(.caption2).foregroundColor(.textSecondary)
                     .padding(.horizontal, 14).padding(.bottom, 8)
             }
