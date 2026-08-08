@@ -1,17 +1,20 @@
 /**
- * LexCockpit automated content ingestion pipeline.
+ * LexCockpit content ingestion pipeline.
  *
- * Steps:
- *  A. Fetch RSS from `news_sources`
- *  B. Dedup by `ingested_items.source_url`
- *  C. LLM relevance filter (LexDigestGlobal criteria)
- *  D. Generate structured draft → `articles` (status concept/draft)
- *  E. Optionally mirror Markdown into the GitHub content repo for Cockpit UI
+ * Default mode = scan_only (FREE):
+ *   A. Fetch RSS from `news_sources`
+ *   B. Dedup by `ingested_items.source_url`
+ *   C. Keyword relevance filter (no LLM)
+ *   D. Queue interesting hits on the waiting list (status = `queued`)
+ *
+ * Optional later (PIPELINE_MODE=full + API keys):
+ *   E. LLM filter + draft generation → `articles` + optional GitHub mirror
  *
  * Auth: Authorization Bearer service_role OR header `x-cron-secret` == CRON_SECRET
  */
 import { createClient } from "npm:@supabase/supabase-js@2"
 import { fetchFeed } from "../_shared/rss.ts"
+import { scoreKeywords } from "../_shared/keywords.ts"
 import { evaluateRelevance, generateDraftSchema } from "../_shared/llm.ts"
 import { buildDraftMarkdown, pushMarkdown } from "../_shared/github.ts"
 
@@ -38,7 +41,6 @@ function authorized(req: Request): boolean {
   const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
   if (service && token && token === service) return true
 
-  // Local `supabase functions serve` convenience when CRON_SECRET unset.
   if (!cronSecret && !service) return true
   return false
 }
@@ -50,6 +52,17 @@ function adminClient() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
+/** scan_only = free waiting list; full = LLM drafts (needs API keys). */
+function resolveMode(req: Request): "scan_only" | "full" {
+  const q = new URL(req.url).searchParams.get("mode")
+  if (q === "full" || q === "scan_only") return q
+  const env = (Deno.env.get("PIPELINE_MODE") ?? "scan_only").toLowerCase()
+  if (env === "full" && (Deno.env.get("OPENAI_API_KEY") || Deno.env.get("ANTHROPIC_API_KEY"))) {
+    return "full"
+  }
+  return "scan_only"
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors })
   if (req.method !== "POST" && req.method !== "GET") {
@@ -59,10 +72,11 @@ Deno.serve(async (req) => {
 
   const supabase = adminClient()
   const dryRun = new URL(req.url).searchParams.get("dry_run") === "1"
+  const mode = resolveMode(req)
 
   const { data: run, error: runErr } = await supabase
     .from("pipeline_runs")
-    .insert({ status: "running" })
+    .insert({ status: "running", details: { mode } })
     .select("id")
     .single()
   if (runErr) return json({ error: runErr.message }, 500)
@@ -72,6 +86,7 @@ Deno.serve(async (req) => {
   let itemsFetched = 0
   let itemsNew = 0
   let itemsRelevant = 0
+  let itemsQueued = 0
   let draftsCreated = 0
   const errors: string[] = []
 
@@ -94,7 +109,6 @@ Deno.serve(async (req) => {
       itemsFetched += items.length
 
       for (const item of items) {
-        // Dedup
         const { data: existing } = await supabase
           .from("ingested_items")
           .select("id")
@@ -117,7 +131,6 @@ Deno.serve(async (req) => {
           .select("id")
           .single()
         if (insErr) {
-          // Unique race → skip
           if (insErr.code === "23505") continue
           errors.push(`insert ${item.link}: ${insErr.message}`)
           continue
@@ -133,21 +146,74 @@ Deno.serve(async (req) => {
           continue
         }
 
-        const verdict = await evaluateRelevance({
+        // --- Free keyword gate (always runs) ---
+        const kw = scoreKeywords({
           title: item.title,
           snippet: item.snippet,
           sourceName: source.name,
         })
 
+        if (mode === "scan_only") {
+          if (kw.relevant) {
+            itemsRelevant++
+            itemsQueued++
+            await supabase.from("ingested_items").update({
+              status: "queued",
+              is_relevant: true,
+              relevance_score: kw.score,
+              relevance_reason: kw.reason,
+              raw: {
+                guid: item.guid,
+                matched: kw.matched,
+                criteria: kw.criteria,
+                mode: "scan_only",
+              },
+            }).eq("id", ingested.id)
+          } else {
+            await supabase.from("ingested_items").update({
+              status: "rejected",
+              is_relevant: false,
+              relevance_score: kw.score,
+              relevance_reason: kw.reason,
+            }).eq("id", ingested.id)
+          }
+          continue
+        }
+
+        // --- Full mode (paid LLM) — only for keyword survivors ---
+        if (!kw.relevant) {
+          await supabase.from("ingested_items").update({
+            status: "rejected",
+            is_relevant: false,
+            relevance_score: kw.score,
+            relevance_reason: kw.reason,
+          }).eq("id", ingested.id)
+          continue
+        }
+
+        const verdict = await evaluateRelevance({
+          title: item.title,
+          snippet: item.snippet,
+          sourceName: source.name,
+        })
+        const score = Math.max(kw.score, verdict.score)
+        const criteria = [...new Set([...kw.criteria, ...verdict.criteria])]
+
         await supabase.from("ingested_items").update({
           status: "evaluated",
           is_relevant: verdict.relevant,
-          relevance_score: verdict.score,
-          relevance_reason: verdict.reason,
+          relevance_score: score,
+          relevance_reason: `${kw.reason} | llm: ${verdict.reason}`,
         }).eq("id", ingested.id)
 
         if (!verdict.relevant || verdict.score < 0.55) {
-          await supabase.from("ingested_items").update({ status: "rejected" }).eq("id", ingested.id)
+          // Keep on waiting list instead of hard-rejecting keyword hits.
+          itemsRelevant++
+          itemsQueued++
+          await supabase.from("ingested_items").update({
+            status: "queued",
+            is_relevant: true,
+          }).eq("id", ingested.id)
           continue
         }
 
@@ -159,7 +225,7 @@ Deno.serve(async (req) => {
             sourceUrl: item.link,
             sourceName: source.name,
             publishedAt: item.publishedAt,
-            criteria: verdict.criteria,
+            criteria,
           })
 
           const md = buildDraftMarkdown({
@@ -171,7 +237,7 @@ Deno.serve(async (req) => {
             sourceName: source.name,
             sourcePublishedAt: item.publishedAt,
             body: schema.body_markdown,
-            relevanceScore: verdict.score,
+            relevanceScore: score,
           })
 
           let githubPath: string | null = null
@@ -211,8 +277,8 @@ Deno.serve(async (req) => {
                 source_slug: source.slug,
                 region: source.region,
               },
-              relevance_score: verdict.score,
-              relevance_criteria: verdict.criteria,
+              relevance_score: score,
+              relevance_criteria: criteria,
               topic: schema.topic,
               tags: schema.tags,
               github_path: githubPath,
@@ -223,11 +289,11 @@ Deno.serve(async (req) => {
             .single()
 
           if (artErr) {
-            // slug collision — keep ingested, mark error
             await supabase.from("ingested_items").update({
-              status: "error",
+              status: "queued",
               error_message: artErr.message,
             }).eq("id", ingested.id)
+            itemsQueued++
             errors.push(`article ${md.slug}: ${artErr.message}`)
             continue
           }
@@ -241,15 +307,18 @@ Deno.serve(async (req) => {
         } catch (genErr) {
           const msg = genErr instanceof Error ? genErr.message : String(genErr)
           await supabase.from("ingested_items").update({
-            status: "error",
+            status: "queued",
             error_message: msg,
+            is_relevant: true,
+            relevance_score: score,
           }).eq("id", ingested.id)
+          itemsQueued++
           errors.push(`generate ${item.link}: ${msg}`)
         }
       }
     }
 
-    const status = errors.length === 0 ? "ok" : (draftsCreated > 0 || itemsNew > 0 ? "partial" : "error")
+    const status = errors.length === 0 ? "ok" : (itemsQueued > 0 || draftsCreated > 0 || itemsNew > 0 ? "partial" : "error")
     await supabase.from("pipeline_runs").update({
       finished_at: new Date().toISOString(),
       status,
@@ -259,19 +328,22 @@ Deno.serve(async (req) => {
       items_relevant: itemsRelevant,
       drafts_created: draftsCreated,
       error_message: errors.length ? errors.slice(0, 8).join(" | ") : null,
-      details: { errors: errors.slice(0, 40), dry_run: dryRun },
+      details: { errors: errors.slice(0, 40), dry_run: dryRun, mode, items_queued: itemsQueued },
     }).eq("id", runId)
 
     return json({
       run_id: runId,
+      mode,
       status,
       sources_scanned: sourcesScanned,
       items_fetched: itemsFetched,
       items_new: itemsNew,
       items_relevant: itemsRelevant,
+      items_queued: itemsQueued,
       drafts_created: draftsCreated,
       errors,
       dry_run: dryRun,
+      review_queue: "select * from review_queue",
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -284,7 +356,8 @@ Deno.serve(async (req) => {
       items_relevant: itemsRelevant,
       drafts_created: draftsCreated,
       error_message: message,
+      details: { mode, items_queued: itemsQueued },
     }).eq("id", runId)
-    return json({ run_id: runId, error: message }, 500)
+    return json({ run_id: runId, mode, error: message }, 500)
   }
 })

@@ -1,24 +1,37 @@
 #!/usr/bin/env node
 /**
- * In-process Node worker — same steps as the Supabase Edge Function.
- * Usage:
- *   npm run ingest
- *   npm run ingest:dry
+ * In-process Node worker — default FREE scan-only waiting list.
+ *
+ *   npm run ingest          → scan_only (keywords → review_queue)
+ *   npm run ingest:full     → paid LLM drafts (needs API keys)
+ *   npm run ingest:dry      → fetch + dedup only
  *   node src/run.mjs --source politico-europe
  */
 import { createClient } from "@supabase/supabase-js"
 import { loadEnv } from "./load-env.mjs"
 import { fetchFeed } from "./lib/rss.mjs"
+import { scoreKeywords } from "./lib/keywords.mjs"
 import { evaluateRelevance, generateDraftSchema } from "./lib/llm.mjs"
 import { buildDraftMarkdown, pushMarkdown } from "./lib/github.mjs"
 
 loadEnv()
 
 const dryRun = process.argv.includes("--dry-run")
+const wantFull = process.argv.includes("--full")
 const sourceFilter = (() => {
   const i = process.argv.indexOf("--source")
   return i >= 0 ? process.argv[i + 1] : null
 })()
+
+const hasLlm = Boolean(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY)
+const envMode = (process.env.PIPELINE_MODE ?? "scan_only").toLowerCase()
+const mode = wantFull || envMode === "full"
+  ? (hasLlm ? "full" : "scan_only")
+  : "scan_only"
+
+if (wantFull && !hasLlm) {
+  console.warn("⚠ --full requested but no LLM API key set → falling back to scan_only")
+}
 
 const url = process.env.SUPABASE_URL
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -31,11 +44,12 @@ const supabase = createClient(url, key, { auth: { persistSession: false } })
 
 const { data: run, error: runErr } = await supabase
   .from("pipeline_runs")
-  .insert({ status: "running" })
+  .insert({ status: "running", details: { mode } })
   .select("id")
   .single()
 if (runErr) {
   console.error("pipeline_runs insert failed:", runErr.message)
+  console.error("Did you run both SQL migrations in the Supabase SQL Editor?")
   process.exit(1)
 }
 
@@ -43,8 +57,11 @@ let sourcesScanned = 0
 let itemsFetched = 0
 let itemsNew = 0
 let itemsRelevant = 0
+let itemsQueued = 0
 let draftsCreated = 0
 const errors = []
+
+console.log(`Mode: ${mode}${dryRun ? " (dry-run)" : ""}`)
 
 try {
   let q = supabase.from("news_sources").select("*").eq("enabled", true)
@@ -103,27 +120,73 @@ try {
         continue
       }
 
-      const verdict = await evaluateRelevance({
+      const kw = scoreKeywords({
         title: item.title,
         snippet: item.snippet,
         sourceName: source.name,
       })
 
-      await supabase.from("ingested_items").update({
-        status: "evaluated",
-        is_relevant: verdict.relevant,
-        relevance_score: verdict.score,
-        relevance_reason: verdict.reason,
-      }).eq("id", ingested.id)
+      if (mode === "scan_only") {
+        if (kw.relevant) {
+          itemsRelevant++
+          itemsQueued++
+          console.log(`  ★ queued (${kw.score}): ${item.title.slice(0, 80)}`)
+          await supabase.from("ingested_items").update({
+            status: "queued",
+            is_relevant: true,
+            relevance_score: kw.score,
+            relevance_reason: kw.reason,
+            raw: {
+              guid: item.guid,
+              matched: kw.matched,
+              criteria: kw.criteria,
+              mode: "scan_only",
+            },
+          }).eq("id", ingested.id)
+        } else {
+          await supabase.from("ingested_items").update({
+            status: "rejected",
+            is_relevant: false,
+            relevance_score: kw.score,
+            relevance_reason: kw.reason,
+          }).eq("id", ingested.id)
+        }
+        continue
+      }
+
+      // full mode
+      if (!kw.relevant) {
+        await supabase.from("ingested_items").update({
+          status: "rejected",
+          is_relevant: false,
+          relevance_score: kw.score,
+          relevance_reason: kw.reason,
+        }).eq("id", ingested.id)
+        continue
+      }
+
+      const verdict = await evaluateRelevance({
+        title: item.title,
+        snippet: item.snippet,
+        sourceName: source.name,
+      })
+      const score = Math.max(kw.score, verdict.score)
+      const criteria = [...new Set([...kw.criteria, ...verdict.criteria])]
 
       if (!verdict.relevant || verdict.score < 0.55) {
-        await supabase.from("ingested_items").update({ status: "rejected" }).eq("id", ingested.id)
+        itemsRelevant++
+        itemsQueued++
+        await supabase.from("ingested_items").update({
+          status: "queued",
+          is_relevant: true,
+          relevance_score: score,
+          relevance_reason: `${kw.reason} | llm: ${verdict.reason}`,
+        }).eq("id", ingested.id)
         continue
       }
 
       itemsRelevant++
-      console.log(`  ✓ relevant (${verdict.score}): ${item.title.slice(0, 80)}`)
-
+      console.log(`  ✓ drafting (${score}): ${item.title.slice(0, 80)}`)
       try {
         const schema = await generateDraftSchema({
           title: item.title,
@@ -131,7 +194,7 @@ try {
           sourceUrl: item.link,
           sourceName: source.name,
           publishedAt: item.publishedAt,
-          criteria: verdict.criteria,
+          criteria,
         })
         const md = buildDraftMarkdown({
           title: schema.working_title,
@@ -142,7 +205,7 @@ try {
           sourceName: source.name,
           sourcePublishedAt: item.publishedAt,
           body: schema.body_markdown,
-          relevanceScore: verdict.score,
+          relevanceScore: score,
         })
 
         let githubPath = null
@@ -152,7 +215,6 @@ try {
           if (pushed) {
             githubPath = pushed.path
             githubSha = pushed.commitSha
-            console.log(`  → GitHub ${pushed.path}`)
           }
         } catch (ghErr) {
           errors.push(`github: ${ghErr.message}`)
@@ -175,8 +237,8 @@ try {
             source_name: source.name,
             source_published_at: item.publishedAt,
             source_metadata: { feed: source.feed_url, source_slug: source.slug },
-            relevance_score: verdict.score,
-            relevance_criteria: verdict.criteria,
+            relevance_score: score,
+            relevance_criteria: criteria,
             topic: schema.topic,
             tags: schema.tags,
             github_path: githubPath,
@@ -188,9 +250,10 @@ try {
 
         if (artErr) {
           await supabase.from("ingested_items").update({
-            status: "error",
+            status: "queued",
             error_message: artErr.message,
           }).eq("id", ingested.id)
+          itemsQueued++
           errors.push(artErr.message)
           continue
         }
@@ -202,15 +265,17 @@ try {
         draftsCreated++
       } catch (genErr) {
         await supabase.from("ingested_items").update({
-          status: "error",
+          status: "queued",
           error_message: genErr.message,
+          is_relevant: true,
         }).eq("id", ingested.id)
+        itemsQueued++
         errors.push(genErr.message)
       }
     }
   }
 
-  const status = errors.length === 0 ? "ok" : (draftsCreated || itemsNew ? "partial" : "error")
+  const status = errors.length === 0 ? "ok" : (itemsQueued || draftsCreated || itemsNew ? "partial" : "error")
   await supabase.from("pipeline_runs").update({
     finished_at: new Date().toISOString(),
     status,
@@ -220,20 +285,23 @@ try {
     items_relevant: itemsRelevant,
     drafts_created: draftsCreated,
     error_message: errors.length ? errors.slice(0, 8).join(" | ") : null,
-    details: { errors: errors.slice(0, 40), dry_run: dryRun },
+    details: { errors: errors.slice(0, 40), dry_run: dryRun, mode, items_queued: itemsQueued },
   }).eq("id", run.id)
 
   console.log(JSON.stringify({
     run_id: run.id,
+    mode,
     status,
     sources_scanned: sourcesScanned,
     items_fetched: itemsFetched,
     items_new: itemsNew,
     items_relevant: itemsRelevant,
+    items_queued: itemsQueued,
     drafts_created: draftsCreated,
     errors,
     dry_run: dryRun,
   }, null, 2))
+  console.log("\nWaiting list: SELECT * FROM review_queue;")
 } catch (err) {
   await supabase.from("pipeline_runs").update({
     finished_at: new Date().toISOString(),
@@ -244,6 +312,7 @@ try {
     items_new: itemsNew,
     items_relevant: itemsRelevant,
     drafts_created: draftsCreated,
+    details: { mode, items_queued: itemsQueued },
   }).eq("id", run.id)
   console.error(err)
   process.exit(1)

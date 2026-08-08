@@ -1,13 +1,16 @@
 # LexCockpit — automated content ingestion
 
-Server-side pipeline that scans configured RSS sources, filters for LexDigestGlobal
-relevance (EU Regulation, Sanctions, Defence Supply Chains, Geopolitics), and
-writes structured AI drafts into Supabase `articles` **and** (optionally) the
-GitHub Markdown content repo so they show up in LexCockpit’s **Content / Overview**
-tabs with an **AI Draft / Review Required** badge.
+Server-side pipeline that scans configured RSS sources and builds a **human
+review waiting list**.
+
+**Default = free `scan_only`:** keyword filter → rows in `review_queue`  
+(`status = queued`). No LLM keys, no auto-writing.
+
+**Optional later = `full`:** GPT-4o-mini / Claude Haiku drafts into `articles`
+(+ optional GitHub Markdown for LexCockpit).
 
 > LexCockpit itself remains a SwiftUI macOS app that reads articles from GitHub.
-> This Supabase project is the ingestion + staging database the prompt asked for.
+> Start with [SCAN_ONLY_SETUP.md](SCAN_ONLY_SETUP.md).
 
 ## Tables
 

@@ -7,9 +7,10 @@
   "scripts": {
     "ingest": "node src/run.mjs",
     "ingest:dry": "node src/run.mjs --dry-run",
+    "ingest:full": "node src/run.mjs --full",
     "trigger": "node src/trigger-edge.mjs",
     "test:rss": "node src/test-rss.mjs",
-    "test:unit": "node src/test-markdown.mjs",
+    "test:unit": "node src/test-markdown.mjs && node src/test-keywords.mjs",
     "test": "npm run test:unit && npm run test:rss"
   },
   "engines": {
