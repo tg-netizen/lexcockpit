@@ -1,0 +1,21 @@
+{
+  "name": "lexcockpit-ingest-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local / cron Node worker for LexCockpit news ingestion + AI draft generation",
+  "scripts": {
+    "ingest": "node src/run.mjs",
+    "ingest:dry": "node src/run.mjs --dry-run",
+    "trigger": "node src/trigger-edge.mjs",
+    "test:rss": "node src/test-rss.mjs",
+    "test:unit": "node src/test-markdown.mjs",
+    "test": "npm run test:unit && npm run test:rss"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1"
+  }
+}

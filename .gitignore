@@ -23,3 +23,10 @@ xcuserdata/
 projects.local.json
 dist/
 scripts/AppIcon.iconset/
+
+# Ingest pipeline (Node)
+pipeline/node_modules/
+pipeline/.env
+supabase/.temp/
+supabase/functions/.env
+supabase/functions/.env.local

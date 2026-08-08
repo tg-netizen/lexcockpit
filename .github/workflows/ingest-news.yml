@@ -1,0 +1,39 @@
+# Optional external cron that triggers the Supabase Edge Function.
+# Requires repository secrets:
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CRON_SECRET
+name: Ingest news drafts
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"   # every 2 hours
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Fetch + dedup only (no LLM / drafts)"
+        type: boolean
+        default: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ingest-news Edge Function
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "Skipping — SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured."
+            exit 0
+          fi
+          QS=""
+          if [ "$DRY_RUN" = "true" ]; then QS="?dry_run=1"; fi
+          curl -fsS -X POST \
+            "${SUPABASE_URL%/}/functions/v1/ingest-news${QS}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "x-cron-secret: ${CRON_SECRET:-}" \
+            -H "Content-Type: application/json" \
+            -d "{\"trigger\":\"github-actions\",\"run\":\"${GITHUB_RUN_ID}\"}"

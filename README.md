@@ -78,6 +78,21 @@ To develop against local data, run `python3 -m http.server` in the website repo 
 change `base` in `Store.swift` to `http://localhost:8000/data/` (then also tick
 *Allow Arbitrary Loads* under App Transport Security, since that's plain http).
 
+## Automated news ingestion (AI drafts)
+
+LexCockpit’s Content / Overview tabs read Markdown from GitHub. A Supabase-backed
+pipeline can scan RSS sources, filter for LexDigestGlobal relevance, and write
+structured drafts (`ai_generated: true`) that appear in-app as
+**AI Draft · Review Required**.
+
+| Path | Role |
+|------|------|
+| [`supabase/`](supabase/) | Schema migration + Edge Function `ingest-news` |
+| [`pipeline/`](pipeline/) | Node.js local / cron worker |
+| [`.github/workflows/ingest-news.yml`](.github/workflows/ingest-news.yml) | Optional GitHub Actions cron |
+
+See [`supabase/README.md`](supabase/README.md) for deploy + secrets.
+
 ## Good next steps (v2)
 
 - **Native notifications** when a watched file changes (`UNUserNotificationCenter`) —

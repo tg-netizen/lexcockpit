@@ -9,15 +9,20 @@ struct ContentEntry: Identifiable, Hashable {
     let name: String            // filename
     let title: String
     let date: String
-    let status: String          // draft / scheduled / published / —
+    let status: String          // draft / concept / scheduled / published / —
     var preview: String = ""    // first body line (library row)
     var words: Int = 0
     var scheduled: String = ""  // scheduled_publish_at, if any
     var type: String = ""       // deep-dive / brief / …
     var topic: String = ""
+    /// Set by the automated ingest pipeline (`ai_generated: true` / `origin: ai-ingest`).
+    var aiGenerated: Bool = false
+    var reviewRequired: Bool = false
     var id: String { path }
 
-    var isDraft: Bool { status == "draft" }
+    var isDraft: Bool { status == "draft" || status == "concept" }
+    /// AI-produced briefing that still needs a human pass before publish.
+    var isAIDraft: Bool { aiGenerated || status == "concept" }
 
     /// Live URL: the site publishes at the file stem.
     func liveURL(site: String?) -> String? {
@@ -441,12 +446,14 @@ struct ContentCacheEntry: Codable {
     var scheduled: String? = nil
     var type: String? = nil
     var topic: String? = nil
+    var aiGenerated: Bool? = nil
+    var reviewRequired: Bool? = nil
 }
 
 extension WorkspaceModel {
     private var contentCacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("LexCockpit/content-cache4-\(site.id).json")
+            .appendingPathComponent("LexCockpit/content-cache5-\(site.id).json")
     }
     private func loadContentCache() -> [String: ContentCacheEntry] {
         (try? JSONDecoder().decode([String: ContentCacheEntry].self,
@@ -490,10 +497,15 @@ extension WorkspaceModel {
                         else { return nil }
                         let doc = FrontmatterDoc.parse(text)
                         let status: String
-                        if doc.scalar("draft") == "true" || doc.scalar("status") == "draft" { status = "draft" }
+                        if doc.scalar("status") == "concept" { status = "concept" }
+                        else if doc.scalar("draft") == "true" || doc.scalar("status") == "draft" { status = "draft" }
                         else if doc.scalar("status") == "scheduled" { status = "scheduled" }
                         else if let s = doc.scalar("status") { status = s }
                         else { status = "—" }
+                        let aiGenerated = doc.scalar("ai_generated") == "true"
+                            || doc.scalar("origin") == "ai-ingest"
+                        let reviewRequired = doc.scalar("review_required") == "true"
+                            || aiGenerated
                         let body = doc.body
                         let preview = body.components(separatedBy: "\n")
                             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -509,7 +521,9 @@ extension WorkspaceModel {
                             words: words,
                             scheduled: doc.scalar("scheduled_publish_at") ?? "",
                             type: doc.scalar("type") ?? "",
-                            topic: doc.scalar("topic") ?? ""))
+                            topic: doc.scalar("topic") ?? "",
+                            aiGenerated: aiGenerated,
+                            reviewRequired: reviewRequired))
                     }
                 }
                 for try await result in group {
@@ -523,7 +537,9 @@ extension WorkspaceModel {
                              title: e.title, date: e.date, status: e.status,
                              preview: e.preview ?? "", words: e.words ?? 0,
                              scheduled: e.scheduled ?? "",
-                             type: e.type ?? "", topic: e.topic ?? "")
+                             type: e.type ?? "", topic: e.topic ?? "",
+                             aiGenerated: e.aiGenerated ?? false,
+                             reviewRequired: e.reviewRequired ?? false)
             }
             contentEntries = entries.sorted { $0.date > $1.date }
         } catch {
@@ -725,6 +741,7 @@ struct ContentLibraryView: View {
     }
 
     private func statusColor(_ entry: ContentEntry) -> Color {
+        if entry.isAIDraft { return .statusAmber }
         if entry.isDraft { return .accentNavy }
         if entry.status == "scheduled" { return .statusAmber }
         if entry.status == "published" { return .statusGreen }
@@ -746,6 +763,11 @@ struct ContentLibraryView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(active ? .accentNavy : .textPrimary)
                         .lineLimit(1)
+                    if entry.isAIDraft {
+                        Text(entry.reviewRequired ? "AI Draft · Review Required" : "AI Draft")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.statusAmber)
+                    }
                     if !entry.preview.isEmpty {
                         Text(entry.preview)
                             .font(.system(size: 11.5))
