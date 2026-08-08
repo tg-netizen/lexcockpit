@@ -21,10 +21,10 @@ struct WelcomeSheet: View {
 
     /// Real highlights of the current beta line — update per release.
     private let highlights = [
-        "Big-number stat tiles and the serif Home greeting",
-        "Article context rail with a readiness checklist",
-        "Publishing rhythm — 12 weeks of dots, plan included",
-        "Settings as a real preferences window with an icon rail",
+        "Check for Updates in Settings → About — install & relaunch in one click",
+        "Free news waiting list from Supabase (Settings → Ingest)",
+        "Overview shows scanned RSS hits scored for LexDigestGlobal",
+        "Content library Review filter for AI drafts",
         "Library and ⌘K grouped by Today / Yesterday / Earlier"
     ]
 
