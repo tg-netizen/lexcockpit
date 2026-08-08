@@ -20,11 +20,15 @@ tabs with an **AI Draft / Review Required** badge.
 
 ## Deploy
 
+**Live project:** `https://fstoenrocfyzdsgmiknj.supabase.co`  
+**Project ref:** `fstoenrocfyzdsgmiknj`  
+**Dashboard:** https://supabase.com/dashboard/project/fstoenrocfyzdsgmiknj
+
 ```bash
-# 1. Create a Supabase project, then:
+# 1. Link + push schema + deploy function
 npm i -g supabase
 supabase login
-supabase link --project-ref <your-ref>
+supabase link --project-ref fstoenrocfyzdsgmiknj
 supabase db push
 supabase functions deploy ingest-news
 
@@ -39,10 +43,14 @@ supabase secrets set \
   GITHUB_CONTENT_PATH=content/articles/
 ```
 
+Dashboard shortcut (no CLI): open
+[SQL Editor](https://supabase.com/dashboard/project/fstoenrocfyzdsgmiknj/sql/new)
+and paste `migrations/20260808133000_content_ingestion_pipeline.sql`.
+
 ## Invoke
 
 ```bash
-curl -X POST "$SUPABASE_URL/functions/v1/ingest-news" \
+curl -X POST "https://fstoenrocfyzdsgmiknj.supabase.co/functions/v1/ingest-news" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
   -H "x-cron-secret: $CRON_SECRET" \
   -H "Content-Type: application/json"
@@ -51,7 +59,7 @@ curl -X POST "$SUPABASE_URL/functions/v1/ingest-news" \
 Dry run (fetch + dedup only, no LLM / no drafts):
 
 ```bash
-curl -X POST "$SUPABASE_URL/functions/v1/ingest-news?dry_run=1" \
+curl -X POST "https://fstoenrocfyzdsgmiknj.supabase.co/functions/v1/ingest-news?dry_run=1" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
   -H "x-cron-secret: $CRON_SECRET"
 ```
