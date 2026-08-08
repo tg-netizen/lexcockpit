@@ -5,7 +5,7 @@ import AppKit
 /// The app's version: from the bundle when running as LexCockpit.app,
 /// falling back to this constant under bare `swift run`.
 enum AppVersion {
-    static let fallback = "0.24.2"
+    static let fallback = "0.25.0"
     /// Release channel label shown in the UI (badge on Home, Settings
     /// footer). Purely cosmetic — the updater compares bare numbers.
     static let channel = "Beta"
@@ -15,12 +15,18 @@ enum AppVersion {
     static var display: String { "\(current) · \(channel)" }
 }
 
-/// Checks the public GitHub Releases API on launch (no token needed) and
-/// exposes a subtle "new version" banner. No auto-update, no Sparkle.
+/// Checks the public GitHub Releases API (no token needed).
+/// Shared so the banner, Settings → About, and the app menu stay in sync.
 @MainActor
 final class UpdateChecker: ObservableObject {
+    static let shared = UpdateChecker()
+
     @Published var available: (version: String, url: URL)?
     @Published var dismissed = false
+    @Published var checking = false
+    @Published var upToDate = false
+    @Published var lastError: String?
+    @Published var lastChecked: Date?
 
     private struct Release: Decodable {
         struct Asset: Decodable { let name: String; let browser_download_url: String }
@@ -33,26 +39,57 @@ final class UpdateChecker: ObservableObject {
 
     enum Phase: Equatable { case idle, downloading, installing, failed(String) }
     @Published var phase: Phase = .idle
-    @Published var zipURL: URL?          // release asset, when present
+    @Published var zipURL: URL?
 
-    func check(repo: String = "tg-netizen/lexcockpit") async {
+    /// Silent launch check. `force` = user clicked "Check for Updates".
+    func check(repo: String = "tg-netizen/lexcockpit", force: Bool = false) async {
+        if force {
+            dismissed = false
+            upToDate = false
+            lastError = nil
+            available = nil
+            zipURL = nil
+            phase = .idle
+        }
+        checking = true
+        defer { checking = false }
+
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else { return }
         var req = URLRequest(url: url)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("LexCockpit", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 10
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let release = try? JSONDecoder().decode(Release.self, from: data),
-              release.draft != true, release.prerelease != true,
-              let releaseURL = URL(string: release.html_url) else { return }   // no releases yet → stay quiet
+        req.timeoutInterval = 15
 
-        let remote = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
-        if Self.isNewer(remote, than: AppVersion.current) {
-            available = (remote, releaseURL)
-            zipURL = release.assets?
-                .first { $0.name.hasSuffix(".zip") }
-                .flatMap { URL(string: $0.browser_download_url) }
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard code == 200 else {
+                lastError = "GitHub returned HTTP \(code)"
+                return
+            }
+            let release = try JSONDecoder().decode(Release.self, from: data)
+            guard release.draft != true, release.prerelease != true,
+                  let releaseURL = URL(string: release.html_url) else {
+                if force { lastError = "No published release yet." }
+                return
+            }
+
+            let remote = release.tag_name.hasPrefix("v")
+                ? String(release.tag_name.dropFirst()) : release.tag_name
+            lastChecked = Date()
+            if Self.isNewer(remote, than: AppVersion.current) {
+                available = (remote, releaseURL)
+                zipURL = release.assets?
+                    .first { $0.name.hasSuffix(".zip") }
+                    .flatMap { URL(string: $0.browser_download_url) }
+                upToDate = false
+            } else {
+                available = nil
+                zipURL = nil
+                upToDate = true
+            }
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
@@ -63,7 +100,12 @@ final class UpdateChecker: ObservableObject {
 
     /// One-click update: download the release zip, swap the bundle, relaunch.
     func installUpdate() async {
-        guard canSelfInstall, let zip = zipURL else { return }
+        guard canSelfInstall, let zip = zipURL else {
+            if let url = available?.url {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
         phase = .downloading
         do {
             let (tmpZip, _) = try await URLSession.shared.download(from: zip)
@@ -88,7 +130,7 @@ final class UpdateChecker: ObservableObject {
             do {
                 try FileManager.default.moveItem(at: newApp, to: current)
             } catch {
-                try? FileManager.default.moveItem(at: backup, to: current)   // roll back
+                try? FileManager.default.moveItem(at: backup, to: current)
                 throw error
             }
 
@@ -113,6 +155,8 @@ final class UpdateChecker: ObservableObject {
     }
 }
 
+// MARK: - Top banner (auto-shown when a newer release exists)
+
 struct UpdateBanner: View {
     @ObservedObject var checker: UpdateChecker
 
@@ -122,27 +166,7 @@ struct UpdateBanner: View {
                 Image(systemName: "arrow.down.circle").foregroundColor(.accentNavy)
                 Text("Version \(update.version) available")
                     .font(.callout).foregroundColor(.textPrimary)
-                switch checker.phase {
-                case .downloading:
-                    ProgressView().controlSize(.small)
-                    Text("Downloading…").font(.callout).foregroundColor(.textSecondary)
-                case .installing:
-                    ProgressView().controlSize(.small)
-                    Text("Installing — the app will relaunch…").font(.callout).foregroundColor(.textSecondary)
-                case .failed(let msg):
-                    Text("Update failed: \(msg)").font(.caption).foregroundColor(.statusRed).lineLimit(1)
-                    Link("Download manually", destination: update.url)
-                        .font(.callout.weight(.semibold)).foregroundColor(.accentNavy)
-                case .idle:
-                    if checker.canSelfInstall {
-                        Button("Install & relaunch") {
-                            Task { await checker.installUpdate() }
-                        }
-                        .buttonStyle(.borderedProminent).tint(.accentNavy).controlSize(.small)
-                    }
-                    Link("Release notes", destination: update.url)
-                        .font(.callout.weight(.semibold)).foregroundColor(.accentNavy)
-                }
+                UpdateActionButtons(checker: checker, compact: true)
                 Spacer()
                 Button {
                     checker.dismissed = true
@@ -152,6 +176,119 @@ struct UpdateBanner: View {
             .padding(.horizontal, 14).padding(.vertical, 8)
             .background(Color.navyTint)
             .overlay(Rectangle().frame(height: 1).foregroundColor(.cardBorder), alignment: .bottom)
+        }
+    }
+}
+
+// MARK: - Settings / About panel + reusable actions
+
+struct UpdatePanel: View {
+    @ObservedObject var checker: UpdateChecker = .shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Updates")
+                .font(.callout.weight(.semibold))
+            Text("Installed: \(AppVersion.display)")
+                .font(.caption).foregroundColor(.textSecondary)
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await checker.check(force: true) }
+                } label: {
+                    if checker.checking {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Checking…")
+                        }
+                    } else {
+                        Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(checker.checking || checker.phase == .downloading || checker.phase == .installing)
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+
+                UpdateActionButtons(checker: checker, compact: false)
+            }
+
+            statusLine
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.bgCard))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cardBorder, lineWidth: 1))
+    }
+
+    @ViewBuilder private var statusLine: some View {
+        if checker.checking {
+            Text("Looking up the latest GitHub release…")
+                .font(.caption).foregroundColor(.textSecondary)
+        } else if case .failed(let msg) = checker.phase {
+            Text("Install failed: \(msg)")
+                .font(.caption).foregroundColor(.statusRed)
+        } else if let err = checker.lastError {
+            Text(err).font(.caption).foregroundColor(.statusRed)
+        } else if let update = checker.available {
+            Text("Version \(update.version) is ready to install.")
+                .font(.caption).foregroundColor(.statusAmber)
+            if !checker.canSelfInstall {
+                Text("Self-install works from LexCockpit.app (not from `swift run`). Use Download if needed.")
+                    .font(.caption2).foregroundColor(.textSecondary)
+            }
+        } else if checker.upToDate {
+            Label("You're up to date", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundColor(.statusGreen)
+        } else if let t = checker.lastChecked {
+            Text("Last checked \(t.formatted(date: .omitted, time: .shortened))")
+                .font(.caption2).foregroundColor(.textSecondary)
+        }
+    }
+}
+
+struct UpdateActionButtons: View {
+    @ObservedObject var checker: UpdateChecker
+    var compact: Bool
+
+    var body: some View {
+        Group {
+            switch checker.phase {
+            case .downloading:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading…").font(.callout).foregroundColor(.textSecondary)
+                }
+            case .installing:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(compact ? "Installing…" : "Installing — the app will relaunch…")
+                        .font(.callout).foregroundColor(.textSecondary)
+                }
+            case .failed:
+                if let url = checker.available?.url {
+                    Link("Download manually", destination: url)
+                        .font(.callout.weight(.semibold)).foregroundColor(.accentNavy)
+                }
+            case .idle:
+                if checker.available != nil {
+                    if checker.canSelfInstall {
+                        Button(compact ? "Install & relaunch" : "Install Update & Relaunch") {
+                            Task { await checker.installUpdate() }
+                        }
+                        .buttonStyle(.borderedProminent).tint(.accentNavy)
+                        .controlSize(compact ? .small : .regular)
+                    } else if let url = checker.available?.url {
+                        Link(compact ? "Download" : "Download from GitHub", destination: url)
+                            .font(.callout.weight(.semibold)).foregroundColor(.accentNavy)
+                    }
+                    if let url = checker.available?.url, !compact {
+                        Link("Release notes", destination: url)
+                            .font(.caption)
+                    } else if let url = checker.available?.url, compact {
+                        Link("Release notes", destination: url)
+                            .font(.callout.weight(.semibold)).foregroundColor(.accentNavy)
+                    }
+                }
+            }
         }
     }
 }

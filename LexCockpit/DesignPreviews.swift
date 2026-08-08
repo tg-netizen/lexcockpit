@@ -90,7 +90,7 @@ private struct Swatch: View {
 }
 
 private struct UpdateBannerPreviewHost: View {
-    @StateObject private var checker = UpdateChecker()
+    @ObservedObject private var checker = UpdateChecker.shared
     var body: some View {
         UpdateBanner(checker: checker)
             .onAppear {
