@@ -92,8 +92,12 @@ on conflict (slug) do update
 -- feed item with an absurdly long link would fail the insert and take the rest
 -- of that source's batch down with it. Rejecting the value with a readable
 -- constraint beats an index-internal error nobody can act on.
+-- NOT VALID on purpose: the constraint applies to every new and updated row
+-- but existing rows are not re-checked. Without it, a single over-long URL
+-- already sitting in the table would make this ALTER fail and take the rest of
+-- the script down with it.
 alter table public.ingested_items
   drop constraint if exists ingested_items_source_url_len;
 alter table public.ingested_items
   add constraint ingested_items_source_url_len
-  check (octet_length(source_url) <= 2000);
+  check (octet_length(source_url) <= 2000) not valid;

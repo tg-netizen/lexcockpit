@@ -20,10 +20,10 @@ import { buildDraftMarkdown, pushMarkdown } from "../_shared/github.ts"
 
 /* No CORS headers, on purpose. This is a machine endpoint — pg_cron, GitHub
    Actions and curl call it, and none of them care about CORS. The previous
-   `Access-Control-Allow-Origin: *` invited any web page to fire requests at an
-   endpoint whose gateway JWT check is switched off (config.toml), which is a
-   free distributed guessing machine for CRON_SECRET. Browsers are now blocked
-   by the absence of the header. */
+   `Access-Control-Allow-Origin: *` invited any web page to fire requests at it,
+   a free distributed guessing machine for CRON_SECRET. Supabase's gateway adds
+   its own CORS headers in front of this, which is out of our hands; not adding
+   a second permissive set is. */
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
@@ -41,8 +41,12 @@ function secretsMatch(a: string, b: string): boolean {
 }
 
 /**
- * The only gate in front of this function: `verify_jwt = false` in config.toml
- * means the Supabase gateway waves every request through.
+ * The real gate in front of this function.
+ *
+ * The Supabase gateway checks the Authorization header first (verify_jwt is ON
+ * for the deployed function), but the anon key satisfies that and the anon key
+ * is public by design — it ships inside the Mac app. So the gateway narrows the
+ * field; this narrows it to callers who actually hold a secret.
  *
  * This used to end with `if (!cronSecret && !service) return true` — an
  * unconfigured deployment was open to the internet. Hosted Supabase injects

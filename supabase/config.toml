@@ -22,6 +22,15 @@ port = 54323
 
 [functions.ingest-news]
 # Cron / service callers authenticate with CRON_SECRET or service role.
-# Keep gateway JWT checks off so pg_net can invoke with the publishable key
-# + our own secret header.
-verify_jwt = false
+#
+# TRUE, deliberately, and it matches what is deployed. The function was
+# deployed from the dashboard on 2026-08-08, which switches gateway JWT
+# verification ON regardless of what this file says — config.toml only applies
+# to `supabase functions deploy`. Leaving `false` here would mean the next CLI
+# deploy silently removed a layer that is live today, and nobody would notice.
+#
+# It costs nothing: every caller already sends Authorization alongside
+# x-cron-secret (see .github/workflows/ingest-news.yml and SCAN_ONLY_SETUP.md),
+# and the anon key satisfies the gateway. The real gate is authorized() in the
+# function either way — the anon key is public by design.
+verify_jwt = true
