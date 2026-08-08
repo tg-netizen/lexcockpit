@@ -1391,8 +1391,11 @@ struct SettingsSheet: View {
         Text("Editorial cockpit for LexDigestGlobal — write, plan, publish, and watch the regulatory feeds. Tokens live in the macOS Keychain; article bytes are protected by the block vault.")
             .font(.callout).foregroundColor(.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
+
+        UpdatePanel()
+
         if let url = URL(string: "https://github.com/tg-netizen/lexcockpit/releases") {
-            Link("Releases & changelog", destination: url).font(.callout)
+            Link("All releases on GitHub", destination: url).font(.callout)
         }
         Button("Show what's new") {
             UserDefaults.standard.removeObject(forKey: "lastSeenVersion")

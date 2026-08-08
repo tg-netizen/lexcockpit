@@ -70,6 +70,12 @@ struct LexCockpitApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}   // no "New Window"
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task { await UpdateChecker.shared.check(force: true) }
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+            }
         }
 
         // Multi-window article editing ("Open in New Window" / dock drops)
@@ -111,6 +117,11 @@ struct MenubarView: View {
         Text(unseen > 0 ? "Radar: \(unseen) new change(s)" : "Radar: all caught up")
         Button("Refresh feeds") { Task { await store.loadAll() } }
         Divider()
+        Button("Check for Updates…") {
+            Task { await UpdateChecker.shared.check(force: true) }
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         Button("Open LexCockpit") {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
@@ -223,7 +234,7 @@ enum SidebarSelection: Hashable {
 
 struct ContentView: View {
     @EnvironmentObject var store: CockpitStore
-    @StateObject private var updates = UpdateChecker()
+    @ObservedObject private var updates = UpdateChecker.shared
     @StateObject private var chrome = ChromeModel()
     @State private var selection: SidebarSelection? = .section(.dashboard)
     @State private var showSettings = false
@@ -327,7 +338,7 @@ struct ContentView: View {
         .task {
             restoreSession()                       // instant — local state only
             await store.loadAll()
-            await updates.check()
+            await updates.check(force: false)
             await RadarStore.shared.load(base: store.feedBase)
             _ = await CommitQueue.shared.flush()
             // Flush queued offline commits once a minute while any exist.
