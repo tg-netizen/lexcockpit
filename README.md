@@ -78,6 +78,21 @@ To develop against local data, run `python3 -m http.server` in the website repo 
 change `base` in `Store.swift` to `http://localhost:8000/data/` (then also tick
 *Allow Arbitrary Loads* under App Transport Security, since that's plain http).
 
+## Automated news ingestion (free waiting list)
+
+**Default (free):** RSS scan + keyword filter → Supabase `review_queue`.  
+LexCockpit Overview shows the **News waiting list** (Settings → Ingest → anon key).  
+Nothing is auto-written.
+
+**Optional later (paid):** `PIPELINE_MODE=full` + OpenAI/Anthropic → AI Markdown drafts in GitHub (`AI Draft · Review Required`).
+
+| Path | Role |
+|------|------|
+| [`supabase/SCAN_ONLY_SETUP.md`](supabase/SCAN_ONLY_SETUP.md) | Copy-paste free setup |
+| [`supabase/`](supabase/) | Schema + Edge Function `ingest-news` |
+| [`pipeline/`](pipeline/) | Node.js local / cron worker |
+| [`.github/workflows/ingest-news.yml`](.github/workflows/ingest-news.yml) | Optional GitHub Actions cron |
+
 ## Good next steps (v2)
 
 - **Native notifications** when a watched file changes (`UNUserNotificationCenter`) —

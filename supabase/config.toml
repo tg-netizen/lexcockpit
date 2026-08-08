@@ -1,0 +1,27 @@
+# LexCockpit content-ingestion pipeline — Supabase project config.
+# Link with: supabase link --project-ref <ref>
+# Apply migrations: supabase db push
+# Deploy function: supabase functions deploy ingest-news
+
+project_id = "fstoenrocfyzdsgmiknj"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[functions.ingest-news]
+# Cron / service callers authenticate with CRON_SECRET or service role.
+# Keep gateway JWT checks off so pg_net can invoke with the publishable key
+# + our own secret header.
+verify_jwt = false

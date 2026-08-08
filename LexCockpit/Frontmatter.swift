@@ -553,6 +553,27 @@ func runFrontmatterSelfTests() -> Bool {
     expect(tpl.contains("draft: true") && tpl.contains("status: draft"), "template is a draft")
     expect(tpl.contains("slug: mein-laender-ueberblick"), "template slug transliterated")
 
+    // 6a. AI ingest frontmatter flags (written by supabase/pipeline workers).
+    let aiSample = """
+    ---
+    title: Sanctions briefing
+    date: 2026-08-08
+    draft: true
+    status: draft
+    origin: ai-ingest
+    ai_generated: true
+    review_required: true
+    source_url: https://example.com/story
+    ---
+
+    Body.
+    """
+    let aiDoc = FrontmatterDoc.parse(aiSample)
+    expect(aiDoc.scalar("ai_generated") == "true"
+           && aiDoc.scalar("origin") == "ai-ingest"
+           && aiDoc.scalar("review_required") == "true",
+           "parses AI ingest frontmatter flags")
+
     // 6b. Entry removal keeps everything else verbatim.
     var docR = FrontmatterDoc.parse(sample)
     docR.setScalar("scheduled_publish_at", "2026-08-01")

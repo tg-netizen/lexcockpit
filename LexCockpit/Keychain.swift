@@ -79,6 +79,7 @@ enum Keychain {
         "canva_client_id", "canva_client_secret",
         "canva_access_token", "canva_refresh_token",
         "plausible_api_key", "mailerlite_api_key",
+        "supabase_url", "supabase_anon_key",
     ]
 
     /// One-time ownership adoption: items created by OLD builds belong to a
