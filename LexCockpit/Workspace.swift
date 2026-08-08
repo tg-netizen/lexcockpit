@@ -59,6 +59,11 @@ final class WorkspaceModel: ObservableObject {
     @Published var editor: EditorDocument?          // nil = browsing
     @Published var editorDirty = false
 
+    // Free scan-only waiting list (Supabase review_queue)
+    @Published var reviewQueue: [ReviewQueueItem] = []
+    @Published var reviewQueueError: String?
+    @Published var reviewQueueLoading = false
+
     let preview = PreviewController()
 
     private static var cache: [String: WorkspaceModel] = [:]
@@ -124,6 +129,29 @@ final class WorkspaceModel: ObservableObject {
             repoError = error.localizedDescription
         }
         repoLoading = false
+    }
+
+    /// Load the free ingest waiting list from Supabase `review_queue`.
+    func loadReviewQueue() async {
+        guard SupabaseAPI.isConfigured() else {
+            reviewQueue = []
+            reviewQueueError = nil
+            return
+        }
+        reviewQueueLoading = true
+        do {
+            reviewQueue = try await SupabaseAPI.listReviewQueue()
+            reviewQueueError = nil
+        } catch {
+            reviewQueueError = error.localizedDescription
+        }
+        reviewQueueLoading = false
+    }
+
+    func refreshEditorial() async {
+        async let content: Void = loadContentList()
+        async let queue: Void = loadReviewQueue()
+        _ = await (content, queue)
     }
 }
 
@@ -248,7 +276,9 @@ struct OverviewTabView: View {
 
     private var published: [ContentEntry] { model.contentEntries.filter { $0.status == "published" } }
     private var scheduled: [ContentEntry] { model.contentEntries.filter { !$0.scheduled.isEmpty } }
-    private var drafts: [ContentEntry] { model.contentEntries.filter { $0.isDraft && $0.scheduled.isEmpty } }
+    private var drafts: [ContentEntry] {
+        model.contentEntries.filter { $0.isDraft && !$0.isAIDraft && $0.scheduled.isEmpty }
+    }
     private var aiDrafts: [ContentEntry] { model.contentEntries.filter { $0.isAIDraft && $0.scheduled.isEmpty } }
     @ObservedObject private var radar = RadarStore.shared
     @State private var selected: ContentEntry?
@@ -287,6 +317,9 @@ struct OverviewTabView: View {
                              accent: .brandGold, icon: "calendar")
                     StatTile(value: "\(drafts.count)", label: "In draft",
                              accent: .brandNavy, icon: "square.and.pencil")
+                    StatTile(value: "\(model.reviewQueue.count)", label: "News waiting list",
+                             accent: model.reviewQueue.isEmpty ? .stApplied : .statusAmber,
+                             icon: "tray.full")
                     StatTile(value: "\(aiDrafts.count)", label: "AI drafts to review",
                              accent: aiDrafts.isEmpty ? .stApplied : .statusAmber,
                              icon: "sparkles")
@@ -296,6 +329,8 @@ struct OverviewTabView: View {
                              accent: radar.unseenCount > 0 ? .statusAmber : .stApplied,
                              icon: "dot.radiowaves.left.and.right")
                 }
+
+                waitingListSection
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
@@ -321,9 +356,11 @@ struct OverviewTabView: View {
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.textPrimary)
                     Spacer()
-                    if model.contentLoading { ProgressView().controlSize(.small) }
+                    if model.contentLoading || model.reviewQueueLoading {
+                        ProgressView().controlSize(.small)
+                    }
                     Button {
-                        Task { await model.loadContentList() }
+                        Task { await model.refreshEditorial() }
                     } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                 }
 
@@ -355,9 +392,6 @@ struct OverviewTabView: View {
                                     VStack(alignment: .leading, spacing: 6) {
                                         HStack {
                                             entryPill(entry)
-                                            if entry.isAIDraft {
-                                                Pill(text: "AI DRAFT", color: .statusAmber)
-                                            }
                                             if !entry.type.isEmpty {
                                                 Pill(text: entry.type.uppercased(), color: .brandGold.opacity(0.9))
                                             }
@@ -410,18 +444,122 @@ struct OverviewTabView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .task { if model.contentEntries.isEmpty { await model.loadContentList() } }
+        .task {
+            if model.contentEntries.isEmpty { await model.loadContentList() }
+            await model.loadReviewQueue()
+        }
+    }
+
+    @ViewBuilder private var waitingListSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("News waiting list")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.textPrimary)
+                Spacer()
+                if model.reviewQueueLoading { ProgressView().controlSize(.small) }
+                Text("Free scan · no AI cost")
+                    .font(.caption).foregroundColor(.textSecondary)
+            }
+
+            if !SupabaseAPI.isConfigured() {
+                Card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Connect Supabase to see scanned news").fontWeight(.semibold)
+                        Text("Settings → Accounts → paste your project URL and anon (publishable) key. Then run the ingest Edge Function — interesting items appear here for review.")
+                            .foregroundColor(.textSecondary).font(.callout)
+                    }
+                }
+            } else if let err = model.reviewQueueError {
+                Card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Waiting list", systemImage: "exclamationmark.triangle")
+                            .fontWeight(.semibold).foregroundColor(.statusRed)
+                        Text(err).foregroundColor(.textSecondary).font(.callout)
+                        Text("If this is a permissions error, run the SQL grant in supabase/SCAN_ONLY_SETUP.md (anon select on review_queue).")
+                            .foregroundColor(.textSecondary).font(.caption)
+                    }
+                }
+            } else if model.reviewQueue.isEmpty {
+                Card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Waiting list is empty").fontWeight(.semibold)
+                        Text("Trigger the free ingest scan — relevant RSS hits land here with a score. Nothing is written automatically.")
+                            .foregroundColor(.textSecondary).font(.callout)
+                    }
+                }
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(model.reviewQueue.prefix(25)) { item in
+                        ReviewQueueRow(item: item)
+                    }
+                    if model.reviewQueue.count > 25 {
+                        Text("Showing 25 of \(model.reviewQueue.count) — open Supabase Table Editor for the rest.")
+                            .font(.caption).foregroundColor(.textSecondary)
+                    }
+                }
+            }
+        }
     }
 
     private func entryPill(_ e: ContentEntry) -> some View {
         let (text, color): (String, Color) = {
             if !e.scheduled.isEmpty { return ("SCHEDULED", .statusAmber) }
-            if e.status == "concept" || e.isAIDraft { return ("CONCEPT", .statusAmber) }
+            if e.isAIDraft { return ("AI DRAFT", .statusAmber) }
+            if e.status == "concept" { return ("CONCEPT", .statusAmber) }
             if e.isDraft { return ("DRAFT", .brandNavy) }
             if e.status == "published" { return ("PUBLISHED", .statusGreen) }
             return (e.status.uppercased(), .textSecondary)
         }()
         return Pill(text: text, color: color)
+    }
+}
+
+/// One scanned news candidate on the free waiting list.
+struct ReviewQueueRow: View {
+    let item: ReviewQueueItem
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Pill(text: "QUEUE", color: .statusAmber)
+                    if let src = item.source_name, !src.isEmpty {
+                        Text(src).font(.caption).foregroundColor(.textSecondary)
+                    }
+                    Spacer()
+                    Text(item.scoreLabel)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.statusAmber)
+                        .help(item.relevance_reason ?? "Keyword score")
+                }
+                Text(item.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.textPrimary)
+                    .multilineTextAlignment(.leading)
+                if let snip = item.snippet, !snip.isEmpty {
+                    Text(snip)
+                        .font(.caption)
+                        .foregroundColor(.textSecondary)
+                        .lineLimit(2)
+                }
+                HStack {
+                    if let reason = item.relevance_reason, !reason.isEmpty {
+                        Text(reason)
+                            .font(.system(size: 10.5))
+                            .foregroundColor(.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    if let url = item.openURL {
+                        Link(destination: url) {
+                            Label("Open source", systemImage: "arrow.up.right")
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -969,6 +1107,8 @@ struct SettingsSheet: View {
     @State private var showDiagnostics = false
     @State private var plausibleKey = ""
     @State private var mailerliteKey = ""
+    @State private var supabaseURL = ""
+    @State private var supabaseAnonKey = ""
     @ObservedObject private var canva = CanvaAuth.shared
 
     /// Preferences sections — icon rail on the left, one pane at a
@@ -976,13 +1116,14 @@ struct SettingsSheet: View {
     /// keeps the old single-scroll flow: a newcomer should see every
     /// field at once, not hunt through tabs.
     enum Pane: String, CaseIterable, Identifiable {
-        case accounts, canva, analytics, feeds, about
+        case accounts, canva, analytics, ingest, feeds, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .accounts:  return "Accounts"
             case .canva:     return "Canva"
             case .analytics: return "Analytics"
+            case .ingest:    return "Ingest"
             case .feeds:     return "Feeds"
             case .about:     return "About"
             }
@@ -992,6 +1133,7 @@ struct SettingsSheet: View {
             case .accounts:  return "key.fill"
             case .canva:     return "paintbrush.fill"
             case .analytics: return "chart.bar.fill"
+            case .ingest:    return "tray.and.arrow.down.fill"
             case .feeds:     return "antenna.radiowaves.left.and.right"
             case .about:     return "info.circle.fill"
             }
@@ -1015,6 +1157,8 @@ struct SettingsSheet: View {
                         canvaPane
                         Divider()
                         analyticsPane
+                        Divider()
+                        ingestPane
                         Divider()
                         feedsPane
                     }
@@ -1061,6 +1205,7 @@ struct SettingsSheet: View {
                             case .accounts:  keychainNote; accountsPane
                             case .canva:     canvaPane
                             case .analytics: analyticsPane
+                            case .ingest:    ingestPane
                             case .feeds:     feedsPane
                             case .about:     aboutPane
                             }
@@ -1098,7 +1243,10 @@ struct SettingsSheet: View {
         if !githubPAT.isEmpty { Keychain.set(Keychain.githubPAT, githubPAT) }
         if !plausibleKey.isEmpty { Keychain.set(Keychain.plausibleKey, plausibleKey) }
         if !mailerliteKey.isEmpty { Keychain.set(Keychain.mailerliteKey, mailerliteKey) }
+        if !supabaseURL.isEmpty { Keychain.set(Keychain.supabaseURL, supabaseURL) }
+        if !supabaseAnonKey.isEmpty { Keychain.set(Keychain.supabaseAnonKey, supabaseAnonKey) }
         plausibleKey = ""; mailerliteKey = ""
+        supabaseURL = ""; supabaseAnonKey = ""
         netlifyPAT = ""; buildHook = ""; githubPAT = ""
         UserDefaults.standard.set(
             feedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1187,6 +1335,22 @@ struct SettingsSheet: View {
                 await ConnectionTest.plausible(host: "lexdigestglobal.com")
             }
             testRow("mailerlite", "Test MailerLite") { await ConnectionTest.mailerlite() }
+        }
+    }
+
+    @ViewBuilder private var ingestPane: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Free news waiting list (Supabase)")
+                .font(.callout.weight(.semibold))
+            Text("Read-only. Paste the project URL + anon/publishable key — never the service_role key. The Overview tab shows scanned RSS hits from review_queue.")
+                .font(.caption).foregroundColor(.textSecondary)
+            field("Supabase project URL", text: $supabaseURL,
+                  hint: Keychain.defaultSupabaseURL,
+                  present: Keychain.has(Keychain.supabaseURL))
+            field("Supabase anon (publishable) key", text: $supabaseAnonKey,
+                  hint: "Dashboard → Project Settings → API → anon public",
+                  present: Keychain.has(Keychain.supabaseAnonKey))
+            testRow("supabase", "Test waiting list") { await ConnectionTest.supabase() }
         }
     }
 

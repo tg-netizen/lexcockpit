@@ -38,21 +38,42 @@ left join public.news_sources s on s.id = i.source_id
 where i.status = 'queued'
 order by i.relevance_score desc nulls last, i.created_at desc;
 
-grant select on public.review_queue to authenticated;
+grant select on public.review_queue to anon, authenticated;
+
+-- RLS: view is security_invoker, so anon needs SELECT on base tables too
+drop policy if exists "Anon read queued ingested_items" on public.ingested_items;
+create policy "Anon read queued ingested_items"
+  on public.ingested_items for select
+  to anon
+  using (status = 'queued');
+
+drop policy if exists "Anon read news_sources" on public.news_sources;
+create policy "Anon read news_sources"
+  on public.news_sources for select
+  to anon
+  using (true);
 ```
 
-(If you never ran the first migration, run both SQL files under `migrations/` in order.)
+(If you never ran the first migration, run the SQL files under `migrations/` in order.)
 
 ## 2. Secrets for free mode
 
 Only needed to *invoke* the function securely (optional for local Node worker):
 
 - `CRON_SECRET` — random string
+- `PIPELINE_MODE=scan_only` (default)
 - (Supabase auto-provides `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`)
 
-Set `PIPELINE_MODE=scan_only` (this is already the default).
-
 **Do not set** `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` until you want paid drafts.
+
+### LexCockpit Mac app
+
+Settings → **Ingest**:
+- Project URL: `https://fstoenrocfyzdsgmiknj.supabase.co`
+- **anon / publishable** key (Project Settings → API) — never `service_role`
+- **Test waiting list** → should say `✓ review_queue reachable`
+
+Overview then shows **News waiting list**.
 
 ## 3. Deploy function + pull via GitHub Desktop
 

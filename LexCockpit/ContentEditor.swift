@@ -21,8 +21,8 @@ struct ContentEntry: Identifiable, Hashable {
     var id: String { path }
 
     var isDraft: Bool { status == "draft" || status == "concept" }
-    /// AI-produced briefing that still needs a human pass before publish.
-    var isAIDraft: Bool { aiGenerated || status == "concept" }
+    /// True only when the ingest pipeline marked the Markdown as AI-generated.
+    var isAIDraft: Bool { aiGenerated }
 
     /// Live URL: the site publishes at the file stem.
     func liveURL(site: String?) -> String? {
@@ -660,11 +660,16 @@ struct ContentLibraryView: View {
     @State private var search = ""
     @State private var showNewSheet = false
     @State private var pendingOpen: ContentEntry?
+    @State private var reviewOnly = false
 
     private var filtered: [ContentEntry] {
-        guard !search.isEmpty else { return model.contentEntries }
+        var list = model.contentEntries
+        if reviewOnly {
+            list = list.filter { $0.isAIDraft || $0.reviewRequired }
+        }
+        guard !search.isEmpty else { return list }
         let q = search.lowercased()
-        return model.contentEntries.filter {
+        return list.filter {
             $0.title.lowercased().contains(q) || $0.name.lowercased().contains(q)
                 || $0.preview.lowercased().contains(q)
         }
@@ -675,14 +680,33 @@ struct ContentLibraryView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundColor(.textSecondary)
                 TextField("Search…", text: $search).textFieldStyle(.plain)
+                Toggle(isOn: $reviewOnly) {
+                    Text("Review")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Show only AI drafts that still need review")
                 if model.contentLoading { ProgressView().controlSize(.mini) }
-                Button { Task { await model.loadContentList() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).foregroundColor(.textSecondary).help("Refresh list")
+                Button { Task { await model.refreshEditorial() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).foregroundColor(.textSecondary).help("Refresh list + waiting list")
                 Button { showNewSheet = true } label: { Image(systemName: "plus") }
                     .buttonStyle(.plain).foregroundColor(.accentNavy).help("New article")
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             Divider()
+            if !model.reviewQueue.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "tray.full").foregroundColor(.statusAmber)
+                    Text("\(model.reviewQueue.count) news item\(model.reviewQueue.count == 1 ? "" : "s") on the waiting list — see Overview")
+                        .font(.system(size: 11))
+                        .foregroundColor(.textSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.navyTint.opacity(0.55))
+                Divider()
+            }
 
             if let err = model.contentError {
                 VStack {
@@ -725,7 +749,10 @@ struct ContentLibraryView: View {
             }
         }
         .background(Color.bgCard)
-        .task { if model.contentEntries.isEmpty { await model.loadContentList() } }
+        .task {
+            if model.contentEntries.isEmpty { await model.loadContentList() }
+            await model.loadReviewQueue()
+        }
         .sheet(isPresented: $showNewSheet) { NewArticleSheet(model: model) }
         .confirmationDialog("Discard unsaved changes?",
                             isPresented: Binding(get: { pendingOpen != nil },

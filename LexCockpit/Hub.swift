@@ -294,6 +294,7 @@ struct TodayRail: View {
     @EnvironmentObject var store: CockpitStore
     @ObservedObject private var radar = RadarStore.shared
     @ObservedObject private var queue = CommitQueue.shared
+    @State private var waitingCount: Int? = nil
     var navigate: (SidebarSelection) -> Void
 
     private var nextDeadline: Regulation? {
@@ -307,6 +308,8 @@ struct TodayRail: View {
         guard let iso = iso, let date = parseISO(iso) else { return nil }
         return Calendar.current.dateComponents([.day], from: Date(), to: date).day
     }
+
+    private var primarySite: SiteProject? { store.sites.first }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -338,6 +341,34 @@ struct TodayRail: View {
                     Text("No upcoming deadlines.")
                         .font(.system(size: 12)).foregroundColor(.textSecondary)
                 }
+            }
+
+            // News waiting list (free scan-only)
+            if SupabaseAPI.isConfigured(), let n = waitingCount {
+                Button {
+                    if let site = primarySite {
+                        SessionHub.shared.state.workspaceTab = WorkspaceTab.overview.rawValue
+                        SessionHub.shared.state.selectionSite = site.id
+                        SessionHub.shared.state.selectionSection = nil
+                        navigate(.site(site.id))
+                    }
+                } label: {
+                    railCard {
+                        HStack(spacing: 8) {
+                            Image(systemName: "tray.full")
+                                .foregroundColor(n > 0 ? .statusAmber : .statusGreen)
+                            Text(n > 0
+                                 ? "\(n) news item\(n == 1 ? "" : "s") waiting for review"
+                                 : "News waiting list empty")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.textPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10)).foregroundColor(.textSecondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
             }
 
             // Radar
@@ -386,6 +417,10 @@ struct TodayRail: View {
                     .font(.system(size: 12, weight: .medium)).foregroundColor(.accentNavy)
             }
             .buttonStyle(.plain)
+        }
+        .task {
+            guard SupabaseAPI.isConfigured() else { waitingCount = nil; return }
+            waitingCount = try? await SupabaseAPI.listReviewQueue().count
         }
     }
 

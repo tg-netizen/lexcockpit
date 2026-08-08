@@ -66,6 +66,14 @@ enum ConnectionTest {
         } catch { return "✗ \(short(error))" }
     }
 
+    static func supabase() async -> String {
+        guard Keychain.has(Keychain.supabaseAnonKey) else { return "✗ no anon key saved" }
+        do {
+            let items = try await SupabaseAPI.listReviewQueue()
+            return "✓ review_queue reachable (\(items.count) waiting)"
+        } catch { return "✗ \(short(error))" }
+    }
+
     private static func short(_ error: Error) -> String {
         let s = error.localizedDescription
         return s.count > 90 ? String(s.prefix(87)) + "…" : s
