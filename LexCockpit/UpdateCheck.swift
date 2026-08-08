@@ -98,6 +98,47 @@ final class UpdateChecker: ObservableObject {
         Bundle.main.bundleURL.pathExtension == "app" && zipURL != nil
     }
 
+    /// Run a tool and hand back (exit status, combined output).
+    private static func run(_ tool: String, _ args: [String]) throws -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        try p.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /**
+     Refuse to install a bundle whose code signature does not check out.
+
+     Without this the updater downloaded a zip, unpacked it and replaced the
+     running app with whatever was inside — no signature check, no checksum, no
+     identity pinning. Three details made that worse than it sounds: the release
+     bundle is ad-hoc signed with no Team ID, `URLSession` downloads carry no
+     quarantine attribute so Gatekeeper never evaluates the result, and the app
+     is self-signed anyway. Anyone able to publish a release asset on the repo
+     could run code on this machine.
+
+     `codesign --verify --strict` is the floor, not the ceiling: it proves the
+     bundle is internally consistent and unmodified since signing, not WHO
+     signed it. An ad-hoc signature carries no identity to pin, so this is as
+     far as it can go until the app has a real Developer ID — at which point a
+     `--requirement` on the team identifier belongs here too.
+     */
+    private static func verifySignature(of app: URL) throws {
+        let (status, output) = try run("/usr/bin/codesign",
+                                       ["--verify", "--strict", "--deep", app.path])
+        guard status == 0 else {
+            let detail = output.split(separator: "\n").first.map(String.init)
+                ?? "invalid signature"
+            throw APIError.http(0, "update rejected — signature check failed: \(detail)")
+        }
+    }
+
     /// One-click update: download the release zip, swap the bundle, relaunch.
     func installUpdate() async {
         guard canSelfInstall, let zip = zipURL else {
@@ -107,22 +148,39 @@ final class UpdateChecker: ObservableObject {
             return
         }
         phase = .downloading
+        /* A fresh directory every time. The old name came from
+           `Int.random(in: 0..<99999)` and was created with
+           `withIntermediateDirectories: true`, which does NOT throw when the
+           directory already exists — so a collision silently reused a staging
+           directory that could still hold `previous.app` from a failed attempt.
+           `contentsOfDirectory` has no defined order, so the installer could
+           then have picked the OLD bundle and reported success. */
+        let stage = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("lc-update-\(UUID().uuidString)", isDirectory: true)
+
         do {
             let (tmpZip, _) = try await URLSession.shared.download(from: zip)
             phase = .installing
-            let stage = FileManager.default.temporaryDirectory
-                .appendingPathComponent("lc-update-\(Int.random(in: 0..<99999))", isDirectory: true)
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
 
-            let unzip = Process()
-            unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            unzip.arguments = ["-xk", tmpZip.path, stage.path]
-            try unzip.run(); unzip.waitUntilExit()
-            guard unzip.terminationStatus == 0,
-                  let newApp = try FileManager.default.contentsOfDirectory(
-                      at: stage, includingPropertiesForKeys: nil)
-                      .first(where: { $0.pathExtension == "app" })
-            else { throw APIError.http(0, "no .app in release zip") }
+            let unpack = stage.appendingPathComponent("unpack", isDirectory: true)
+            try FileManager.default.createDirectory(at: unpack, withIntermediateDirectories: true)
+            let (unzipStatus, unzipOut) = try Self.run("/usr/bin/ditto",
+                                                       ["-xk", tmpZip.path, unpack.path])
+            guard unzipStatus == 0 else {
+                throw APIError.http(0, "could not unpack the release zip: \(unzipOut)")
+            }
+            /* Exactly one .app, or refuse. "Take the first one you find" is not
+               a decision an updater should make on the user's behalf. */
+            let apps = try FileManager.default
+                .contentsOfDirectory(at: unpack, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "app" }
+            guard apps.count == 1, let newApp = apps.first else {
+                throw APIError.http(0, apps.isEmpty
+                    ? "no .app in the release zip"
+                    : "release zip contains \(apps.count) apps — refusing to guess")
+            }
+            try Self.verifySignature(of: newApp)
 
             let current = Bundle.main.bundleURL
             let backup = stage.appendingPathComponent("previous.app")
@@ -130,6 +188,26 @@ final class UpdateChecker: ObservableObject {
             do {
                 try FileManager.default.moveItem(at: newApp, to: current)
             } catch {
+                /* If putting the new bundle in place fails, the old one is
+                   already gone. A silent `try?` here meant a failed rollback
+                   left the user with no app at all and nothing saying so. */
+                do {
+                    try FileManager.default.moveItem(at: backup, to: current)
+                } catch {
+                    throw APIError.http(0, "update failed and the previous version "
+                        + "could not be restored automatically. A copy is at "
+                        + "\(backup.path) — move it back to \(current.path).")
+                }
+                throw error
+            }
+            /* Verify the installed copy too: `ditto -xk` restores whatever
+               attributes the archive carried, and a bundle that fails
+               validation in place will not launch. Checking before handing
+               control over means a rollback is still possible. */
+            do {
+                try Self.verifySignature(of: current)
+            } catch {
+                try? FileManager.default.removeItem(at: current)
                 try? FileManager.default.moveItem(at: backup, to: current)
                 throw error
             }
@@ -137,8 +215,11 @@ final class UpdateChecker: ObservableObject {
             let config = NSWorkspace.OpenConfiguration()
             config.createsNewApplicationInstance = true
             try await NSWorkspace.shared.openApplication(at: current, configuration: config)
+            /* Only now is the staging copy expendable. */
+            try? FileManager.default.removeItem(at: stage)
             NSApp.terminate(nil)
         } catch {
+            try? FileManager.default.removeItem(at: stage)
             phase = .failed(error.localizedDescription)
         }
     }

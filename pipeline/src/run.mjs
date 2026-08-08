@@ -120,11 +120,9 @@ try {
         continue
       }
 
-      const kw = scoreKeywords({
-        title: item.title,
-        snippet: item.snippet,
-        sourceName: source.name,
-      })
+      /* sourceName is deliberately not passed: the scorer no longer votes on
+         a feed's own title (see lib/keywords.mjs). */
+      const kw = scoreKeywords({ title: item.title, snippet: item.snippet })
 
       if (mode === "scan_only") {
         if (kw.relevant) {

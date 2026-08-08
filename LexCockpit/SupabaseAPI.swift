@@ -57,9 +57,16 @@ enum SupabaseAPI {
         guard var comps = URLComponents(string: "\(base)/rest/v1/review_queue") else {
             throw APIError.badURL
         }
+        /* Named columns instead of `*`: a column later added to the view then
+           cannot start arriving in the app unannounced. And a hard limit — the
+           waiting list only grows, and fetching every row ever queued is not
+           something a sidebar list should do. */
         comps.queryItems = [
-            URLQueryItem(name: "select", value: "*"),
+            URLQueryItem(name: "select", value:
+                "id,title,source_url,snippet,published_at,relevance_score,"
+                + "relevance_reason,status,created_at,source_name,source_slug,region"),
             URLQueryItem(name: "order", value: "relevance_score.desc.nullslast,created_at.desc"),
+            URLQueryItem(name: "limit", value: "200"),
         ]
         guard let url = comps.url else { throw APIError.badURL }
 

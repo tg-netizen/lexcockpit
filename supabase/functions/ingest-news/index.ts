@@ -18,31 +18,52 @@ import { scoreKeywords } from "../_shared/keywords.ts"
 import { evaluateRelevance, generateDraftSchema } from "../_shared/llm.ts"
 import { buildDraftMarkdown, pushMarkdown } from "../_shared/github.ts"
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-cron-secret",
-}
-
+/* No CORS headers, on purpose. This is a machine endpoint — pg_cron, GitHub
+   Actions and curl call it, and none of them care about CORS. The previous
+   `Access-Control-Allow-Origin: *` invited any web page to fire requests at an
+   endpoint whose gateway JWT check is switched off (config.toml), which is a
+   free distributed guessing machine for CRON_SECRET. Browsers are now blocked
+   by the absence of the header. */
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: { ...cors, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
   })
 }
 
-function authorized(req: Request): boolean {
-  const cronSecret = Deno.env.get("CRON_SECRET")
-  const headerSecret = req.headers.get("x-cron-secret")
-  if (cronSecret && headerSecret && headerSecret === cronSecret) return true
+/** Length-independent comparison, so response timing cannot leak the secret
+    one character at a time. Comparing lengths first is standard practice. */
+function secretsMatch(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
 
-  const auth = req.headers.get("Authorization") ?? ""
-  const token = auth.replace(/^Bearer\s+/i, "").trim()
+/**
+ * The only gate in front of this function: `verify_jwt = false` in config.toml
+ * means the Supabase gateway waves every request through.
+ *
+ * This used to end with `if (!cronSecret && !service) return true` — an
+ * unconfigured deployment was open to the internet. Hosted Supabase injects
+ * SUPABASE_SERVICE_ROLE_KEY automatically, so that branch was hard to reach in
+ * production, but it was live under `supabase functions serve` and on any
+ * self-hosted deploy. Missing configuration now denies.
+ */
+function authorized(req: Request): { ok: boolean; reason?: string } {
+  const cronSecret = Deno.env.get("CRON_SECRET") ?? ""
   const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-  if (service && token && token === service) return true
-
-  if (!cronSecret && !service) return true
-  return false
+  if (!cronSecret && !service) {
+    return { ok: false, reason: "not configured — set CRON_SECRET" }
+  }
+  const headerSecret = req.headers.get("x-cron-secret") ?? ""
+  if (cronSecret && headerSecret && secretsMatch(headerSecret, cronSecret)) {
+    return { ok: true }
+  }
+  const token = (req.headers.get("Authorization") ?? "")
+    .replace(/^Bearer\s+/i, "").trim()
+  if (service && token && secretsMatch(token, service)) return { ok: true }
+  return { ok: false, reason: "bad or missing credentials" }
 }
 
 function adminClient() {
@@ -52,23 +73,30 @@ function adminClient() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-/** scan_only = free waiting list; full = LLM drafts (needs API keys). */
+/**
+ * scan_only = free waiting list; full = LLM drafts (needs API keys).
+ *
+ * The `?mode=` query parameter used to be returned unchecked, while only the
+ * environment path required an API key to be present. Anything that could
+ * reach this function could therefore force paid mode with one query string,
+ * and neither README mentioned it. Both paths now go through the same gate:
+ * full mode requires a key, whoever asks and however they ask.
+ */
 function resolveMode(req: Request): "scan_only" | "full" {
+  const hasKey = !!(Deno.env.get("OPENAI_API_KEY") || Deno.env.get("ANTHROPIC_API_KEY"))
   const q = new URL(req.url).searchParams.get("mode")
-  if (q === "full" || q === "scan_only") return q
-  const env = (Deno.env.get("PIPELINE_MODE") ?? "scan_only").toLowerCase()
-  if (env === "full" && (Deno.env.get("OPENAI_API_KEY") || Deno.env.get("ANTHROPIC_API_KEY"))) {
-    return "full"
-  }
-  return "scan_only"
+  const wanted = (q === "full" || q === "scan_only")
+    ? q
+    : (Deno.env.get("PIPELINE_MODE") ?? "scan_only").toLowerCase()
+  return (wanted === "full" && hasKey) ? "full" : "scan_only"
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors })
   if (req.method !== "POST" && req.method !== "GET") {
     return json({ error: "Method not allowed" }, 405)
   }
-  if (!authorized(req)) return json({ error: "Unauthorized" }, 401)
+  const auth = authorized(req)
+  if (!auth.ok) return json({ error: "Unauthorized", detail: auth.reason }, 401)
 
   const supabase = adminClient()
   const dryRun = new URL(req.url).searchParams.get("dry_run") === "1"
@@ -109,6 +137,15 @@ Deno.serve(async (req) => {
       itemsFetched += items.length
 
       for (const item of items) {
+        /* `source_url` carries a UNIQUE btree index, and a btree entry cannot
+           exceed roughly 2704 bytes. One broken or hostile feed item with an
+           absurd link would otherwise fail at the index and be reported as an
+           opaque error. Skip it here and name it. */
+        if (!item.link || new TextEncoder().encode(item.link).length > 2000) {
+          errors.push(`${source.slug}: skipped an item with a missing or over-long link`)
+          continue
+        }
+
         const { data: existing } = await supabase
           .from("ingested_items")
           .select("id")
@@ -147,11 +184,10 @@ Deno.serve(async (req) => {
         }
 
         // --- Free keyword gate (always runs) ---
-        const kw = scoreKeywords({
-          title: item.title,
-          snippet: item.snippet,
-          sourceName: source.name,
-        })
+        /* sourceName is deliberately not passed: the scorer no longer votes
+           on a feed's own title (see keywords.ts). Feeding it in made every
+           item from "Defence News" relevant by construction. */
+        const kw = scoreKeywords({ title: item.title, snippet: item.snippet })
 
         if (mode === "scan_only") {
           if (kw.relevant) {
