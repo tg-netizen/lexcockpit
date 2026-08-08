@@ -3,7 +3,7 @@
 # Apply migrations: supabase db push
 # Deploy function: supabase functions deploy ingest-news
 
-project_id = "lexcockpit"
+project_id = "fstoenrocfyzdsgmiknj"
 
 [api]
 enabled = true
