@@ -158,6 +158,15 @@ Deno.serve(async (req) => {
         if (existing) continue
 
         itemsNew++
+
+        /* A dry run counts and stops. It used to INSERT the item and then mark
+           it `evaluated / dry_run`, which permanently consumed it: dedup keys
+           on source_url alone, so every article touched by a dry run could
+           never be scored afterwards. The first dry run against this project
+           swallowed 127 of 130 articles that way — the run that followed found
+           three new ones. A rehearsal that quietly eats the thing it is
+           rehearsing is worse than no rehearsal. */
+        if (dryRun) continue
         const { data: ingested, error: insErr } = await supabase
           .from("ingested_items")
           .insert({
@@ -174,16 +183,6 @@ Deno.serve(async (req) => {
         if (insErr) {
           if (insErr.code === "23505") continue
           errors.push(`insert ${item.link}: ${insErr.message}`)
-          continue
-        }
-
-        if (dryRun) {
-          await supabase.from("ingested_items").update({
-            status: "evaluated",
-            is_relevant: false,
-            relevance_reason: "dry_run",
-            relevance_score: 0,
-          }).eq("id", ingested.id)
           continue
         }
 
