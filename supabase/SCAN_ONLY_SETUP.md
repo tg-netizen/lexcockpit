@@ -3,6 +3,16 @@
 Default pipeline mode: **scan RSS → keyword filter → `review_queue`**.  
 No OpenAI/Anthropic keys. No auto-writing.
 
+`full` mode (LLM drafts) requires `PIPELINE_MODE=full` **and** an
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the function's secrets. Without a
+key the function stays in `scan_only` — including when `?mode=full` is passed
+on the URL. Nothing can switch on paid mode from the outside.
+
+The function has `verify_jwt = false` (so pg_cron and CI can call it with a
+plain header), which makes `CRON_SECRET` the only thing standing in front of
+it. Set it. Without both `CRON_SECRET` and a service-role key the function
+refuses every request rather than running open.
+
 ## 1. Run this SQL (if you already ran the first migration)
 
 Open https://supabase.com/dashboard/project/fstoenrocfyzdsgmiknj/sql/new and run:
@@ -106,3 +116,13 @@ select * from review_queue;
 ```
 
 Or Table Editor → `ingested_items` → filter `status = queued`.
+
+## 5. Hardening + feed repair (run once)
+
+Run `supabase/migrations/20260808170000_tighten_grants_and_fix_feeds.sql` in the
+SQL editor. It narrows anon to the ten columns `review_queue` actually exposes
+(it could previously read every column of queued rows, including the full RSS
+payload in `raw`), drops the blanket "any authenticated user may update any
+article" policy, and replaces the three seeded feeds that were dead on
+2026-08-08 — Euractiv (403), EU Sanctions Map (404) and NATO (HTML, no items) —
+with six that were fetched and confirmed to parse.
