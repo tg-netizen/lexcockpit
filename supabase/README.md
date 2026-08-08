@@ -35,15 +35,13 @@ supabase link --project-ref fstoenrocfyzdsgmiknj
 supabase db push
 supabase functions deploy ingest-news
 
-# 2. Secrets
+# 2. Secrets — free scan-only only needs CRON_SECRET
 supabase secrets set \
-  CRON_SECRET=... \
-  OPENAI_API_KEY=... \          # or ANTHROPIC_API_KEY=...
-  LLM_PROVIDER=openai \         # openai | anthropic
-  GITHUB_PAT=ghp_... \
-  GITHUB_REPO=tg-netizen/lexdigestglobal-real-version \
-  GITHUB_BRANCH=main \
-  GITHUB_CONTENT_PATH=content/articles/
+  PIPELINE_MODE=scan_only \
+  CRON_SECRET=...
+
+# Later (paid drafts): also set OPENAI_API_KEY / ANTHROPIC_API_KEY,
+# LLM_PROVIDER, GITHUB_PAT, GITHUB_REPO, and PIPELINE_MODE=full
 ```
 
 Dashboard shortcut (no CLI): open
