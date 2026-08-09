@@ -197,6 +197,47 @@ func runStateSelfTests() -> Bool {
     expect(DraftSeed.placeholderTitle(clusterKey: "") == "Untitled brief",
            "seed: an empty cluster key still yields a usable title")
 
+    // ── Is the tracker still being fed? ─────────────────────────────────
+    // An empty changelog is the correct answer almost every day, which is
+    // exactly why it cannot be trusted on its own.
+    let noon = Date(timeIntervalSince1970: 1_786_000_000)          // fixed clock
+    func fresh(_ h: Double) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: noon.addingTimeInterval(-h * 3600))
+    }
+    expect(TrackerFreshness.verdict(lastFetched: fresh(3), success: true,
+                                    errors: [], now: noon) == nil,
+           "tracker: a fetch three hours ago is fine")
+    expect(TrackerFreshness.verdict(lastFetched: fresh(30), success: true,
+                                    errors: [], now: noon) == nil,
+           "tracker: a single late run is not yet an alarm")
+    expect(TrackerFreshness.verdict(lastFetched: fresh(50), success: true,
+                                    errors: [], now: noon)?.contains("updated daily") == true,
+           "tracker: past the daily promise, the promise is the wrong part")
+    expect(TrackerFreshness.verdict(lastFetched: fresh(200), success: true,
+                                    errors: [], now: noon)?.contains("8 days") == true,
+           "tracker: a long stall is reported in days, not hours")
+    expect(TrackerFreshness.verdict(lastFetched: fresh(1), success: true,
+                                    errors: ["EUR-Lex 503"], now: noon)?
+            .contains("EUR-Lex 503") == true,
+           "tracker: a reported error beats a recent timestamp")
+    expect(TrackerFreshness.verdict(lastFetched: fresh(1), success: false,
+                                    errors: [], now: noon) != nil,
+           "tracker: fetchSuccess=false is an alarm on its own")
+    expect(TrackerFreshness.verdict(lastFetched: nil, success: true,
+                                    errors: [], now: noon) != nil,
+           "tracker: no timestamp means the promise cannot be checked")
+    expect(TrackerFreshness.verdict(lastFetched: "not a date", success: true,
+                                    errors: [], now: noon) != nil,
+           "tracker: an unparseable timestamp is not silently treated as fresh")
+
+    // The real shape the site writes, fractional seconds and all.
+    expect(TrackerFreshness.parseISO("2026-08-09T07:53:26.016Z") != nil,
+           "tracker: the site's own timestamp format parses")
+    expect(TrackerFreshness.parseISO("2026-08-09T07:53:26Z") != nil,
+           "tracker: a timestamp without fractional seconds also parses")
+
     // ── The updater's version comparison, which shipped untested ────────
     expect(UpdateChecker.isNewer("0.26.0", than: "0.25.0"), "update: 0.26.0 > 0.25.0")
     expect(!UpdateChecker.isNewer("0.25.0", than: "0.25.0"), "update: equal is not newer")

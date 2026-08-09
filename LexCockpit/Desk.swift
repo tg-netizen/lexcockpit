@@ -132,6 +132,7 @@ enum DeskBuilder {
 
     static func rows(model: WorkspaceModel,
                      radarUnseen: Int,
+                     radarAlarm: String?,
                      openQueue: @escaping () -> Void,
                      openEntry: @escaping (ContentEntry) -> Void,
                      seedDraft: @escaping (String, [ReviewQueueItem]) -> Void) -> [DeskRow] {
@@ -149,6 +150,13 @@ enum DeskBuilder {
         if let err = model.deploysError {
             out.append(DeskRow(kind: .alarm, title: "Deploys could not be read",
                                detail: err, badge: "failed", action: nil))
+        }
+        /* The site promises daily EUR-Lex verification. When the data behind
+           that promise stalls, the promise becomes the false claim — and this
+           app is the only thing that reads both the promise and the data. */
+        if let stale = radarAlarm {
+            out.append(DeskRow(kind: .alarm, title: "The tracker has stopped being fed",
+                               detail: stale, badge: "stale", action: nil))
         }
 
         // 2 · Opportunities — clusters that are ready to become a brief.
@@ -191,8 +199,15 @@ enum DeskBuilder {
     }
 
     /// The other half: everything that is fine, in one sentence.
-    static func quiet(model: WorkspaceModel) -> [String] {
+    ///
+    /// `trackerFetched` is passed in rather than assumed: "the tracker is
+    /// current" is only allowed on the QUIET line if something actually
+    /// checked, which is the entire lesson of the empty waiting list.
+    static func quiet(model: WorkspaceModel, trackerFetched: String? = nil) -> [String] {
         var q: [String] = []
+        if let raw = trackerFetched, let when = TrackerFreshness.parseISO(raw) {
+            q.append("tracker fetched \(LoadState<Int>.ago(when))")
+        }
         if case .loaded(let rows, let at) = model.reviewQueueState, !rows.isEmpty {
             q.append("\(rows.count) in the waiting list, checked \(LoadState<Int>.ago(at))")
         }
@@ -220,12 +235,14 @@ extension DateFormatter {
 struct DeskView: View {
     @ObservedObject var model: WorkspaceModel
     @ObservedObject var radar = RadarStore.shared
+    @EnvironmentObject var store: CockpitStore
     var openQueue: () -> Void
     var openEntry: (ContentEntry) -> Void
     var seedDraft: (String, [ReviewQueueItem]) -> Void
 
     private var rows: [DeskRow] {
         DeskBuilder.rows(model: model, radarUnseen: radar.unseenCount,
+                         radarAlarm: store.trackerFreshnessAlarm,
                          openQueue: openQueue, openEntry: openEntry,
                          seedDraft: seedDraft)
     }
@@ -258,7 +275,7 @@ struct DeskView: View {
             Image(systemName: "checkmark.circle").foregroundColor(.stApplied)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Nothing needs you").font(.system(size: 15, weight: .semibold))
-                Text(DeskBuilder.quiet(model: model).joined(separator: " · "))
+                Text(DeskBuilder.quiet(model: model, trackerFetched: store.trackerMeta?.lastFetched).joined(separator: " · "))
                     .font(.caption).foregroundColor(.textSecondary)
             }
             Spacer()
@@ -270,7 +287,8 @@ struct DeskView: View {
     }
 
     private var quietLine: some View {
-        Text(DeskBuilder.quiet(model: model).joined(separator: "  ·  "))
+        Text(DeskBuilder.quiet(model: model, trackerFetched: store.trackerMeta?.lastFetched)
+            .joined(separator: "  ·  "))
             .font(.system(size: 11, design: .monospaced))
             .foregroundColor(.textSecondary)
             .padding(.top, 2)
