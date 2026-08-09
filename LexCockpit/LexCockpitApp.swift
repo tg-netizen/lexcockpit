@@ -10,8 +10,12 @@ struct LexCockpitApp: App {
         // `swift run LexCockpit --selftest` → run the frontmatter/slug
         // round-trip tests headlessly and exit (used for verification).
         if CommandLine.arguments.contains("--selftest") {
-            let ok = runFrontmatterSelfTests()
-            exit(ok ? 0 : 1)
+            let a = runFrontmatterSelfTests()
+            /* The audit's finding was not "too few tests" — it was that the
+               tested parts already worked and the untested four were where
+               every bug lived. These cover the two that are pure logic. */
+            let b = MainActor.assumeIsolated { runStateSelfTests() }
+            exit(a && b ? 0 : 1)
         }
         // `--roundtrip <dir>` → run the WYSIWYG round-trip data-safety test
         // against real article files (offscreen Toast UI editor) and exit.

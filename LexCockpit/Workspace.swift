@@ -40,29 +40,41 @@ final class WorkspaceModel: ObservableObject {
     @Published var editorFull = false
 
     // Deploys
-    @Published var deploys: [NetlifyDeploy] = []
-    @Published var deploysError: String?
-    @Published var deploysLoading = false
+    /* One state instead of three fields. The old triple could not say
+       "not asked yet", and an empty array read as "there is nothing" —
+       see LoadState.swift for the morning that cost. The computed
+       accessors keep every existing view compiling unchanged. */
+    @Published var deploysState: LoadState<[NetlifyDeploy]> = .never
+    var deploys: [NetlifyDeploy] { deploysState.value ?? [] }
+    var deploysError: String? { deploysState.error }
+    var deploysLoading: Bool { deploysState.isLoading }
     @Published var triggering = false
 
     // Repo
-    @Published var commits: [GHCommit] = []
+    @Published var repoState: LoadState<[GHCommit]> = .never
+    var commits: [GHCommit] { repoState.value ?? [] }
     @Published var pulls: [GHPull] = []
-    @Published var repoError: String?
-    @Published var repoLoading = false
+    var repoError: String? { repoState.error }
+    var repoLoading: Bool { repoState.isLoading }
     @Published var dataFiles: [GHContentItem] = []
 
     // Content (browser + editor) — lives here so edits survive tab switches
-    @Published var contentEntries: [ContentEntry] = []
-    @Published var contentError: String?
-    @Published var contentLoading = false
+    @Published var contentState: LoadState<[ContentEntry]> = .never
+    var contentEntries: [ContentEntry] { contentState.value ?? [] }
+    var contentError: String? { contentState.error }
+    var contentLoading: Bool { contentState.isLoading }
     @Published var editor: EditorDocument?          // nil = browsing
     @Published var editorDirty = false
 
     // Free scan-only waiting list (Supabase review_queue)
-    @Published var reviewQueue: [ReviewQueueItem] = []
-    @Published var reviewQueueError: String?
-    @Published var reviewQueueLoading = false
+    @Published var reviewQueueState: LoadState<[ReviewQueueItem]> = .never
+    var reviewQueue: [ReviewQueueItem] { reviewQueueState.value ?? [] }
+    var reviewQueueError: String? { reviewQueueState.error }
+    var reviewQueueLoading: Bool { reviewQueueState.isLoading }
+
+    /* What the last ingest run believed it had queued. Held beside the
+       queue itself so the two can be compared — see contradiction(). */
+    @Published var lastRunQueued: Int?
 
     let preview = PreviewController()
 
@@ -82,28 +94,25 @@ final class WorkspaceModel: ObservableObject {
 
     func loadDeploys() async {
         guard let siteId = site.netlify_site_id, !siteId.isEmpty else {
-            deploysError = "No netlify_site_id configured for this project (projects.json)."
+            deploysState = .failed("No netlify_site_id configured for this project (projects.json).", at: Date())
             return
         }
-        deploysLoading = true
+        deploysState.beginLoading()
         do {
-            deploys = try await NetlifyAPI.deploys(siteId: siteId)
-            deploysError = nil
+            deploysState = .loaded(try await NetlifyAPI.deploys(siteId: siteId), at: Date())
         } catch {
-            deploysError = error.localizedDescription
+            deploysState = .failed(error.localizedDescription, at: Date())
         }
-        deploysLoading = false
     }
 
     func triggerDeploy() async {
         triggering = true
         do {
             try await NetlifyAPI.triggerBuildHook()
-            deploysError = nil
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await loadDeploys()
         } catch {
-            deploysError = error.localizedDescription
+            deploysState = .failed(error.localizedDescription, at: Date())
         }
         triggering = false
     }
@@ -112,40 +121,52 @@ final class WorkspaceModel: ObservableObject {
 
     func loadRepo() async {
         guard let repo = site.repo, !repo.isEmpty else {
-            repoError = "No repo configured for this project (projects.json)."
+            repoState = .failed("No repo configured for this project (projects.json).", at: Date())
             return
         }
-        repoLoading = true
+        repoState.beginLoading()
         do {
             async let c = GitHubAPI.commits(repo: repo)
             async let p = GitHubAPI.pulls(repo: repo)
             async let d = GitHubAPI.listDir(repo: repo, path: "data")
             let (cs, ps, ds) = try await (c, p, d)
-            commits = cs
+            repoState = .loaded(cs, at: Date())
             pulls = ps
             dataFiles = ds.filter { $0.type == "file" && $0.name.hasSuffix(".json") }
-            repoError = nil
         } catch {
-            repoError = error.localizedDescription
+            repoState = .failed(error.localizedDescription, at: Date())
         }
-        repoLoading = false
     }
 
     /// Load the free ingest waiting list from Supabase `review_queue`.
     func loadReviewQueue() async {
         guard SupabaseAPI.isConfigured() else {
-            reviewQueue = []
-            reviewQueueError = nil
+            /* Not configured is not the same as empty, and it is certainly
+               not "trigger a scan". Stay at .never and let the panel say so. */
+            reviewQueueState = .never
             return
         }
-        reviewQueueLoading = true
+        reviewQueueState.beginLoading()
         do {
-            reviewQueue = try await SupabaseAPI.listReviewQueue()
-            reviewQueueError = nil
+            let rows = try await SupabaseAPI.listReviewQueue()
+            reviewQueueState = .loaded(rows, at: Date())
         } catch {
-            reviewQueueError = error.localizedDescription
+            reviewQueueState = .failed(error.localizedDescription, at: Date())
         }
-        reviewQueueLoading = false
+        /* Ask the pipeline what it thinks it queued. If the two disagree the
+           queue is not empty, it is unreachable — which is exactly what
+           happened when the RLS policies were missing. */
+        lastRunQueued = try? await SupabaseAPI.lastRunItemsQueued()
+    }
+
+    /// The one thing this app can see that nothing else in the stack can:
+    /// both sides of the same number.
+    var queueContradiction: String? {
+        guard case .loaded(let rows, _) = reviewQueueState,
+              rows.isEmpty, let claimed = lastRunQueued, claimed > 0 else { return nil }
+        return "The last ingest run reported \(claimed) item(s) queued, but the "
+             + "waiting list returns none. That is a permissions or policy "
+             + "problem, not an empty queue."
     }
 
     func refreshEditorial() async {
@@ -282,6 +303,7 @@ struct OverviewTabView: View {
     private var aiDrafts: [ContentEntry] { model.contentEntries.filter { $0.isAIDraft && $0.scheduled.isEmpty } }
     @ObservedObject private var radar = RadarStore.shared
     @State private var selected: ContentEntry?
+    @State private var showQueue = false
 
     /// Total words across all articles, compacted ("12.4k") past 10k.
     private var wordsWritten: String {
@@ -310,25 +332,9 @@ struct OverviewTabView: View {
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                LazyVGrid(columns: grid(min: 150), spacing: 14) {
-                    StatTile(value: "\(published.count)", label: "Published",
-                             accent: .stApplied, icon: "checkmark.circle")
-                    StatTile(value: "\(scheduled.count)", label: "Scheduled",
-                             accent: .brandGold, icon: "calendar")
-                    StatTile(value: "\(drafts.count)", label: "In draft",
-                             accent: .brandNavy, icon: "square.and.pencil")
-                    StatTile(value: "\(model.reviewQueue.count)", label: "News waiting list",
-                             accent: model.reviewQueue.isEmpty ? .stApplied : .statusAmber,
-                             icon: "tray.full")
-                    StatTile(value: "\(aiDrafts.count)", label: "AI drafts to review",
-                             accent: aiDrafts.isEmpty ? .stApplied : .statusAmber,
-                             icon: "sparkles")
-                    StatTile(value: wordsWritten, label: "Words written",
-                             accent: .accentNavy, icon: "text.alignleft")
-                    StatTile(value: "\(radar.unseenCount)", label: "Radar to review",
-                             accent: radar.unseenCount > 0 ? .statusAmber : .stApplied,
-                             icon: "dot.radiowaves.left.and.right")
-                }
+                DeskView(model: model,
+                             openQueue: { withAnimation { showQueue = true } },
+                             openEntry: { e in onOpen(e) })
 
                 waitingListSection
 
@@ -458,8 +464,12 @@ struct OverviewTabView: View {
                     .foregroundColor(.textPrimary)
                 Spacer()
                 if model.reviewQueueLoading { ProgressView().controlSize(.small) }
-                Text("Free scan · no AI cost")
-                    .font(.caption).foregroundColor(.textSecondary)
+                /* Provenance, not decoration. A count without a time is a
+                   claim without a date, which is the thing this project
+                   exists to avoid. */
+                Text(model.reviewQueueState.provenance(source: "review_queue"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.textSecondary)
             }
 
             if !SupabaseAPI.isConfigured() {
@@ -480,11 +490,36 @@ struct OverviewTabView: View {
                             .foregroundColor(.textSecondary).font(.caption)
                     }
                 }
-            } else if model.reviewQueue.isEmpty {
+            } else if let clash = model.queueContradiction {
+                /* The alarm nothing else in the stack can raise: the run says
+                   it queued items, the queue returns none. Saying "empty" here
+                   was the wrong advice on 9 August and cost an hour. */
+                Card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("The queue and the pipeline disagree", systemImage: "exclamationmark.2")
+                            .fontWeight(.semibold).foregroundColor(.statusAmber)
+                        Text(clash).foregroundColor(.textSecondary).font(.callout)
+                        Text("Check the anon SELECT policy on ingested_items and the column grants — supabase/SCAN_ONLY_SETUP.md.")
+                            .foregroundColor(.textSecondary).font(.caption)
+                    }
+                }
+            } else if case .never = model.reviewQueueState {
+                /* Not asked yet is not empty. The old code could not tell the
+                   difference and asserted "empty" before the first fetch. */
+                Card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Not loaded yet").fontWeight(.semibold)
+                        Text("The waiting list has not been fetched in this session.")
+                            .foregroundColor(.textSecondary).font(.callout)
+                        Button("Load now") { Task { await model.loadReviewQueue() } }
+                            .buttonStyle(.borderless).font(.callout)
+                    }
+                }
+            } else if model.reviewQueueState.isConfirmedEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Waiting list is empty").fontWeight(.semibold)
-                        Text("Trigger the free ingest scan — relevant RSS hits land here with a score. Nothing is written automatically.")
+                        Text("Checked \(LoadState<Int>.ago(model.reviewQueueState.stamp ?? Date())) — nothing scored above the threshold. Trigger the ingest scan for a fresh sweep; nothing is written automatically.")
                             .foregroundColor(.textSecondary).font(.callout)
                     }
                 }
@@ -533,12 +568,12 @@ struct ReviewQueueRow: View {
                         .foregroundColor(.statusAmber)
                         .help(item.relevance_reason ?? "Keyword score")
                 }
-                Text(item.title)
+                Text(item.displayTitle)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.textPrimary)
                     .multilineTextAlignment(.leading)
-                if let snip = item.snippet, !snip.isEmpty {
-                    Text(snip)
+                if !item.displaySnippet.isEmpty {
+                    Text(item.displaySnippet)
                         .font(.caption)
                         .foregroundColor(.textSecondary)
                         .lineLimit(2)
