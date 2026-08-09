@@ -70,7 +70,8 @@ create policy "Anon read news_sources"
 
 Only needed to *invoke* the function securely (optional for local Node worker):
 
-- `CRON_SECRET` — random string
+- `CRON_SECRET` — random string. This is the gate; without it the function
+  refuses every request rather than running open.
 - `PIPELINE_MODE=scan_only` (default)
 - (Supabase auto-provides `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`)
 
@@ -126,3 +127,22 @@ payload in `raw`), drops the blanket "any authenticated user may update any
 article" policy, and replaces the three seeded feeds that were dead on
 2026-08-08 — Euractiv (403), EU Sanctions Map (404) and NATO (HTML, no items) —
 with six that were fetched and confirmed to parse.
+
+## 6. Automatic runs (GitHub Actions, every 2 hours)
+
+Repository secrets under Settings → Secrets and variables → Actions:
+
+| Secret | Value |
+| --- | --- |
+| `CRON_SECRET` | the same string as the Edge Function secret |
+| `SUPABASE_ANON_KEY` | Project Settings → API → anon / publishable |
+
+`SUPABASE_URL` is optional and defaults to the project URL.
+
+Note that this deliberately does NOT use the service-role key. The gateway's
+verify_jwt check is satisfied by any legacy-signed key, and `authorized()` in
+the function checks `CRON_SECRET`. Handing CI a credential that bypasses RLS
+entirely, to make one authenticated POST, buys nothing.
+
+Manual run: Actions → "Ingest news drafts" → Run workflow (with a `dry_run`
+checkbox).
