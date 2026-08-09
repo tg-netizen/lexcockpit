@@ -23,6 +23,10 @@ struct DeskRow: Identifiable {
     let title: String
     let detail: String
     let badge: String
+    /// What a click costs, in the row's own words ("open as a brief").
+    /// Shown on hover — a worklist row that does not say what it does is
+    /// a dashboard tile with extra steps.
+    var hint: String = ""
     var action: (() -> Void)?
 
     var tint: Color {
@@ -48,7 +52,7 @@ enum DeskBuilder {
     /// Words that describe what happened rather than what it happened to.
     /// "3 items circling 'adds'" is not a subject, and the first build of this
     /// screen offered exactly that as a story worth writing.
-    private static let stop: Set<String> = [
+    nonisolated static let stop: Set<String> = [
         "the", "and", "for", "with", "from", "that", "this", "new", "its", "his", "her",
         "will", "have", "has", "been", "more", "than", "what", "when", "where", "which",
         "while", "their", "there", "these", "those", "after", "into", "over", "amid",
@@ -66,7 +70,7 @@ enum DeskBuilder {
         "auch", "noch", "aber", "oder", "zum", "zur", "des", "als", "ist", "sind"
     ]
 
-    private static func keywords(_ it: ReviewQueueItem) -> Set<String> {
+    nonisolated static func keywords(_ it: ReviewQueueItem) -> Set<String> {
         let words = it.displayTitle.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { $0.count > 3 && !stop.contains($0) && Int($0) == nil }
@@ -129,7 +133,8 @@ enum DeskBuilder {
     static func rows(model: WorkspaceModel,
                      radarUnseen: Int,
                      openQueue: @escaping () -> Void,
-                     openEntry: @escaping (ContentEntry) -> Void) -> [DeskRow] {
+                     openEntry: @escaping (ContentEntry) -> Void,
+                     seedDraft: @escaping (String, [ReviewQueueItem]) -> Void) -> [DeskRow] {
         var out: [DeskRow] = []
 
         // 1 · Contradictions first. They mean a number on screen is wrong.
@@ -147,14 +152,17 @@ enum DeskBuilder {
         }
 
         // 2 · Opportunities — clusters that are ready to become a brief.
+        //     The row opens the draft. Naming what a click costs is the
+        //     difference between a worklist and a dashboard.
         for c in clusters(model.reviewQueue) {
-            let sources = Set(c.items.compactMap { $0.source_name }).count
+            let sources = distinctSources(c.items)
             out.append(DeskRow(
                 kind: .opportunity,
                 title: "\(c.items.count) items circling “\(c.key)”",
                 detail: c.items.prefix(2).map { $0.displayTitle }.joined(separator: " · "),
                 badge: "\(sources) source\(sources == 1 ? "" : "s")",
-                action: openQueue))
+                hint: "open as a brief",
+                action: { seedDraft(c.key, c.items) }))
         }
 
         // 3 · Drafts that have stopped moving. A finished draft nobody
@@ -169,6 +177,7 @@ enum DeskBuilder {
                                title: "“\(d.title)” has been a draft for \(age) days",
                                detail: "\(d.words) words, ready to read",
                                badge: "stalled",
+                               hint: "open the draft",
                                action: { openEntry(d) }))
         }
 
@@ -213,10 +222,12 @@ struct DeskView: View {
     @ObservedObject var radar = RadarStore.shared
     var openQueue: () -> Void
     var openEntry: (ContentEntry) -> Void
+    var seedDraft: (String, [ReviewQueueItem]) -> Void
 
     private var rows: [DeskRow] {
         DeskBuilder.rows(model: model, radarUnseen: radar.unseenCount,
-                         openQueue: openQueue, openEntry: openEntry)
+                         openQueue: openQueue, openEntry: openEntry,
+                         seedDraft: seedDraft)
     }
 
     var body: some View {
@@ -285,6 +296,11 @@ private struct DeskRowView: View {
                     Text(row.detail)
                         .font(.caption).foregroundColor(.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if hovering, !row.hint.isEmpty, row.action != nil {
+                    Text("→ " + row.hint)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(row.tint)
                 }
             }
             Spacer(minLength: 8)

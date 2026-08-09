@@ -334,7 +334,12 @@ struct OverviewTabView: View {
             VStack(alignment: .leading, spacing: 16) {
                 DeskView(model: model,
                              openQueue: { withAnimation { showQueue = true } },
-                             openEntry: { e in onOpen(e) })
+                             openEntry: { e in onOpen(e) },
+                             seedDraft: { key, items in
+                                 /* No author: the app does not know whose byline
+                                    this is, and guessing one is a claim. */
+                                 model.newDraftFromQueue(clusterKey: key, items: items, author: "")
+                             })
 
                 waitingListSection
 
@@ -526,7 +531,10 @@ struct OverviewTabView: View {
             } else {
                 LazyVStack(spacing: 8) {
                     ForEach(model.reviewQueue.prefix(25)) { item in
-                        ReviewQueueRow(item: item)
+                        ReviewQueueRow(item: item, seedDraft: { it in
+                            model.newDraftFromQueue(clusterKey: DraftSeed.keyFor(it),
+                                                    items: [it], author: "")
+                        })
                     }
                     if model.reviewQueue.count > 25 {
                         Text("Showing 25 of \(model.reviewQueue.count) — open Supabase Table Editor for the rest.")
@@ -553,6 +561,8 @@ struct OverviewTabView: View {
 /// One scanned news candidate on the free waiting list.
 struct ReviewQueueRow: View {
     let item: ReviewQueueItem
+    /// Present only where a draft can actually be opened.
+    var seedDraft: ((ReviewQueueItem) -> Void)? = nil
 
     var body: some View {
         Card {
@@ -586,6 +596,16 @@ struct ReviewQueueRow: View {
                             .lineLimit(1)
                     }
                     Spacer()
+                    if let seed = seedDraft {
+                        Button { seed(item) } label: {
+                            Label("Draft from this", systemImage: "square.and.pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.brandGold)
+                        .help("Opens a brief seeded with this item's title, link and "
+                              + "retrieval date — one outlet, so it will say so.")
+                    }
                     if let url = item.openURL {
                         Link(destination: url) {
                             Label("Open source", systemImage: "arrow.up.right")

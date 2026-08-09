@@ -110,6 +110,93 @@ func runStateSelfTests() -> Bool {
     expect("Q&A: what next".decodingHTMLEntities == "Q&A: what next",
            "entities: an ampersand with no semicolon is not an entity")
 
+    // ── Seeding a draft: the app positions material and writes no prose ─
+    func seedItem(_ t: String, _ src: String, _ url: String, _ snip: String) -> ReviewQueueItem {
+        ReviewQueueItem(id: UUID().uuidString, title: t, source_url: url, snippet: snip,
+                        published_at: "2026-08-08T10:00:00Z", relevance_score: 0.9,
+                        relevance_reason: nil, status: "queued", created_at: nil,
+                        source_name: src, source_slug: nil, region: nil)
+    }
+    let seeds = [
+        seedItem("Council adopts sanctions package &#038; adds two banks", "Reuters",
+                 "https://example.org/a", "The package covers\ntwo banks and a vessel."),
+        seedItem("Sanctions package: what it covers", "AFP",
+                 "https://example.org/b", "Brussels published the list on Friday."),
+        seedItem("Belarus banks hit by new listings", "Politico",
+                 "https://example.org/c", "")
+    ]
+    let seeded = DraftSeed.markdown(clusterKey: "belarus", items: seeds,
+                                    author: "", today: "2026-08-09")
+
+    /* `LEXCOCKPIT_DUMP_SEED=1 … --selftest` prints the whole generated file.
+       Assertions prove invariants; reading the thing proves it is worth
+       opening. Both are needed. */
+    if ProcessInfo.processInfo.environment["LEXCOCKPIT_DUMP_SEED"] != nil {
+        print("─── seeded draft ───\n\(seeded)─── end ───")
+    }
+
+    // THE rule. Every quoted line must be verbatim from an item — if this
+    // test fails, the app has started writing sentences about the news.
+    let quoted = seeded.components(separatedBy: "\n")
+        .filter { $0.hasPrefix("> ") }
+        .map { String($0.dropFirst(2)) }
+    let allowed = Set(seeds.map { $0.displayTitle }
+        + seeds.map { $0.displaySnippet.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: " ") })
+    expect(!quoted.isEmpty && quoted.allSatisfy { allowed.contains($0) },
+           "seed: every quoted line is verbatim from a queue item — no prose")
+
+    expect(seeded.contains("Council adopts sanctions package & adds two banks"),
+           "seed: the quoted title is entity-decoded, not raw feed markup")
+    expect(!seeded.contains("&#038;"), "seed: no encoded entity survives into a draft")
+    expect(seeded.contains("The package covers two banks and a vessel."),
+           "seed: a multi-line snippet is flattened inside the blockquote")
+
+    // Frontmatter must survive the editor untouched, or the site build breaks.
+    let seededDoc = FrontmatterDoc.parse(seeded)
+    expect(seededDoc.serialize() == seeded,
+           "seed: the generated file round-trips byte-identically")
+
+    /* The title is ours, not an outlet's — copying a headline starts a
+       rewrite. Asserted on the parsed key, not on the raw text: the
+       `sources:` list legitimately carries each outlet's own title, and a
+       substring search cannot tell the two apart. */
+    expect(seededDoc.scalar("title") == "Belarus",
+           "seed: the article title is the shared word, not a feed's headline")
+    expect(seeds.contains { $0.displayTitle == "Council adopts sanctions package & adds two banks" }
+           && seededDoc.scalar("title") != "Council adopts sanctions package & adds two banks",
+           "seed: a feed's own headline never becomes the title")
+    expect(seeded.contains("    tier: secondary"),
+           "seed: sources are seeded secondary — promoting one is the author's call")
+    expect(seeded.contains("    url: https://example.org/c"),
+           "seed: every source URL reaches the frontmatter")
+    expect(seeded.contains("Reuters, AFP, Politico"),
+           "seed: three outlets are named in the header")
+    expect(seeded.contains("retrieved 2026-08-09"), "seed: each item carries its retrieval date")
+
+    // One outlet is the case the method forbids, so the draft has to say so.
+    let single = DraftSeed.markdown(clusterKey: "drones",
+                                    items: [seeds[0], seedItem("Drones again", "Reuters",
+                                                               "https://example.org/d", "")],
+                                    author: "", today: "2026-08-09")
+    expect(single.contains("One outlet only"),
+           "seed: a single-outlet draft says plainly that it is a rewrite")
+    expect(!seeded.contains("One outlet only"),
+           "seed: a corroborated draft carries no such warning")
+
+    expect(DraftSeed.outlets(seeds).count == 3, "seed: outlets are counted distinctly")
+
+    // A lone item has no shared word, so it borrows its most specific one.
+    let lone = seedItem("Commission opens countermeasures consultation", "Reuters",
+                        "https://example.org/e", "")
+    expect(DraftSeed.keyFor(lone) == "countermeasures",
+           "seed: a single item keys on its longest surviving word")
+    expect(!DeskBuilder.keywords(lone).contains("opens"),
+           "seed: the stoplist applies to single items too")
+    expect(DraftSeed.placeholderTitle(clusterKey: "") == "Untitled brief",
+           "seed: an empty cluster key still yields a usable title")
+
     // ── The updater's version comparison, which shipped untested ────────
     expect(UpdateChecker.isNewer("0.26.0", than: "0.25.0"), "update: 0.26.0 > 0.25.0")
     expect(!UpdateChecker.isNewer("0.25.0", than: "0.25.0"), "update: equal is not newer")

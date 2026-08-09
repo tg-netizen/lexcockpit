@@ -587,6 +587,25 @@ extension WorkspaceModel {
         doc.recomputeDirty()
     }
 
+    /// Open a new draft seeded from queue items — see `DraftSeed`.
+    ///
+    /// The folder is the project's first configured content path, because a
+    /// brief that lands somewhere the site does not build is worse than no
+    /// brief at all.
+    func newDraftFromQueue(clusterKey: String, items: [ReviewQueueItem], author: String) {
+        guard !items.isEmpty else { return }
+        let dir = site.content_paths?.first ?? "content/articles/"
+        let cleanDir = dir.hasSuffix("/") ? dir : dir + "/"
+        let today = todayISO()
+        let title = DraftSeed.placeholderTitle(clusterKey: clusterKey)
+        let file = "\(today)-\(slugify(title)).md"
+        let text = DraftSeed.markdown(clusterKey: clusterKey, items: items,
+                                      author: author, today: today)
+        let doc = EditorDocument(repoPath: cleanDir + file, text: text, sha: nil, isNew: true)
+        attachEditor(doc)
+        doc.recomputeDirty()
+    }
+
     private func attachEditor(_ doc: EditorDocument) {
         doc.onDirtyChange = { [weak self] d in self?.editorDirty = d }
         doc.startAutosave()
