@@ -67,6 +67,49 @@ func runStateSelfTests() -> Bool {
     expect(!DeskBuilder.clusters(noise).contains { $0.items.count >= 3 },
            "desk: unrelated items do not cluster")
 
+    // ── The corroboration gate, which the first build did not have ──────
+    let oneOutlet = [item("Brussels tightens export controls on drones", "Reuters"),
+                     item("Export controls on drones tightened, Brussels says", "Reuters"),
+                     item("What the new drone export controls cover", "Reuters")]
+    expect(DeskBuilder.clusters(oneOutlet).isEmpty,
+           "desk: three items from ONE outlet are a rewrite, not a story")
+
+    var mixed = oneOutlet
+    mixed.append(item("Drones: Brussels export controls draw response", "AFP"))
+    expect(!DeskBuilder.clusters(mixed).isEmpty,
+           "desk: a second independent outlet turns it into a story")
+
+    // Verbs are not subjects — "3 items circling 'adds'" was a real row.
+    let verby = [item("Council adds four names to the list", "A"),
+                 item("Brussels adds two banks to the list", "B"),
+                 item("Ministry adds a vessel to the list", "C")]
+    expect(!DeskBuilder.clusters(verby).contains { $0.key == "adds" },
+           "desk: a headline verb never becomes a cluster key")
+
+    // One story must not fill the screen under three of its own words.
+    let overlap = [item("EU sanctions Russia over Belarus transfers", "A"),
+                   item("Russia sanctions: Belarus route targeted", "B"),
+                   item("Belarus and Russia hit by new sanctions", "C")]
+    let ids = DeskBuilder.clusters(overlap).flatMap { $0.items.map(\.id) }
+    expect(ids.count == Set(ids).count,
+           "desk: clusters are disjoint — no item is listed twice")
+
+    // ── HTML entities: a real queue title read "list &#038; adds" ───────
+    expect("list &#038; adds".decodingHTMLEntities == "list & adds",
+           "entities: numeric &#038; becomes &")
+    expect("Tom &amp; Jerry".decodingHTMLEntities == "Tom & Jerry",
+           "entities: named &amp; becomes &")
+    expect("a &amp;#038; b".decodingHTMLEntities == "a & b",
+           "entities: a double-encoded feed decodes in two passes")
+    expect("AT&T merger".decodingHTMLEntities == "AT&T merger",
+           "entities: a bare ampersand is left exactly as it is")
+    expect("Rates rise &hellip; again".decodingHTMLEntities == "Rates rise … again",
+           "entities: named punctuation decodes")
+    expect("&#x26; and &#8364;".decodingHTMLEntities == "& and €",
+           "entities: hex and decimal both decode")
+    expect("Q&A: what next".decodingHTMLEntities == "Q&A: what next",
+           "entities: an ampersand with no semicolon is not an entity")
+
     // ── The updater's version comparison, which shipped untested ────────
     expect(UpdateChecker.isNewer("0.26.0", than: "0.25.0"), "update: 0.26.0 > 0.25.0")
     expect(!UpdateChecker.isNewer("0.25.0", than: "0.25.0"), "update: equal is not newer")

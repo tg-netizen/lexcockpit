@@ -500,7 +500,13 @@ extension WorkspaceModel {
                         else if doc.scalar("draft") == "true" || doc.scalar("status") == "draft" { status = "draft" }
                         else if doc.scalar("status") == "scheduled" { status = "scheduled" }
                         else if let s = doc.scalar("status") { status = s }
-                        else { status = "—" }
+                        /* No status key means published — that is what the site
+                           itself does (`status: data.status || 'published'` in
+                           build-articles.js). This used to fall through to "—",
+                           so the 14 live files whose frontmatter omits the key
+                           showed a grey dot, offered no live link, and counted
+                           as nothing published anywhere in the app. */
+                        else { status = "published" }
                         let aiGenerated = doc.scalar("ai_generated") == "true"
                             || doc.scalar("origin") == "ai-ingest"
                         let reviewRequired = doc.scalar("review_required") == "true"

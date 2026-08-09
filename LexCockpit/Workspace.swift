@@ -568,12 +568,12 @@ struct ReviewQueueRow: View {
                         .foregroundColor(.statusAmber)
                         .help(item.relevance_reason ?? "Keyword score")
                 }
-                Text(item.title)
+                Text(item.displayTitle)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.textPrimary)
                     .multilineTextAlignment(.leading)
-                if let snip = item.snippet, !snip.isEmpty {
-                    Text(snip)
+                if !item.displaySnippet.isEmpty {
+                    Text(item.displaySnippet)
                         .font(.caption)
                         .foregroundColor(.textSecondary)
                         .lineLimit(2)

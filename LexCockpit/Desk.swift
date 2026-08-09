@@ -45,28 +45,85 @@ struct DeskRow: Identifiable {
 
 @MainActor
 enum DeskBuilder {
-    /// Cluster the waiting list by shared vocabulary. Three or more items
-    /// circling the same subject is the signal that a brief is available —
-    /// and it is also the rule the news method requires, because a single
-    /// source is a rewrite and three sources are a story.
-    static func clusters(_ items: [ReviewQueueItem], minSize: Int = 3) -> [(key: String, items: [ReviewQueueItem])] {
-        let stop: Set<String> = ["the", "and", "for", "with", "from", "that", "this", "new",
-                                 "eu", "über", "der", "die", "das", "und", "von", "für",
-                                 "says", "after", "into", "over", "amid", "its", "his", "her"]
+    /// Words that describe what happened rather than what it happened to.
+    /// "3 items circling 'adds'" is not a subject, and the first build of this
+    /// screen offered exactly that as a story worth writing.
+    private static let stop: Set<String> = [
+        "the", "and", "for", "with", "from", "that", "this", "new", "its", "his", "her",
+        "will", "have", "has", "been", "more", "than", "what", "when", "where", "which",
+        "while", "their", "there", "these", "those", "after", "into", "over", "amid",
+        // verbs a headline reaches for, in the two forms a feed uses
+        "adds", "says", "said", "sets", "puts", "takes", "makes", "calls", "urges",
+        "warns", "plans", "seeks", "backs", "signs", "faces", "sees", "gets", "aims",
+        "moves", "holds", "opens", "ends", "cuts", "hits", "wins", "keeps", "shows",
+        "finds", "tells", "asks", "expects", "announces", "announced", "reports",
+        "reported", "confirms", "confirmed", "launches", "launched", "passes", "passed",
+        "adopts", "adopted", "unveils", "agrees", "agreed", "rejects", "rejected",
+        "approves", "approved", "considers", "prepares", "eu",
+        // German, which arrives from the Bundesregierung and ministry feeds
+        "über", "der", "die", "das", "und", "von", "für", "sich", "dem", "den", "ein",
+        "eine", "mit", "auf", "aus", "bei", "nach", "wird", "werden", "haben", "nicht",
+        "auch", "noch", "aber", "oder", "zum", "zur", "des", "als", "ist", "sind"
+    ]
+
+    private static func keywords(_ it: ReviewQueueItem) -> Set<String> {
+        let words = it.displayTitle.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 3 && !stop.contains($0) && Int($0) == nil }
+        return Set(words.prefix(6))
+    }
+
+    private static func distinctSources(_ items: [ReviewQueueItem]) -> Int {
+        Set(items.compactMap { $0.source_name }.filter { !$0.isEmpty }).count
+    }
+
+    /// Cluster the waiting list by shared vocabulary.
+    ///
+    /// Two gates, and the second one is the point: a cluster needs `minSize`
+    /// items **from at least `minSources` different outlets**. Counting items
+    /// alone was wrong — the first build of this screen proposed "3 items
+    /// circling 'adds'" carrying a `1 source` badge, which is one outlet
+    /// repeating itself. That is the rewrite the news method forbids, offered
+    /// under the label of a story.
+    ///
+    /// Clusters are also disjoint. Picking the best bucket and then removing
+    /// its items means one story cannot fill the screen three times under
+    /// three of its own words, which is what "sanctions" / "china" / "adds"
+    /// were on 9 August — the same Chinese countermeasures article, listed
+    /// three times.
+    static func clusters(_ items: [ReviewQueueItem],
+                         minSize: Int = 3,
+                         minSources: Int = 2) -> [(key: String, items: [ReviewQueueItem])] {
+        var pool = items
+        var out: [(key: String, items: [ReviewQueueItem])] = []
+        while out.count < 4 {
+            guard let best = bestBucket(pool, minSize: minSize, minSources: minSources)
+            else { break }
+            out.append(best)
+            let taken = Set(best.items.map { $0.id })
+            pool = pool.filter { !taken.contains($0.id) }
+        }
+        return out
+    }
+
+    private static func bestBucket(_ items: [ReviewQueueItem],
+                                   minSize: Int,
+                                   minSources: Int) -> (key: String, items: [ReviewQueueItem])? {
         var buckets: [String: [ReviewQueueItem]] = [:]
         for it in items {
-            let words = it.title.lowercased()
-                .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .filter { $0.count > 3 && !stop.contains($0) }
-            /* Two keywords per item, not one: a single word buckets half the
-               feed under "russia" and tells you nothing you did not know. */
-            for w in Set(words.prefix(6)) { buckets[w, default: []].append(it) }
+            for w in keywords(it) { buckets[w, default: []].append(it) }
         }
-        return buckets
-            .filter { $0.value.count >= minSize }
-            .sorted { $0.value.count > $1.value.count }
-            .prefix(4)
-            .map { (key: $0.key, items: $0.value) }
+        /* Independent corroboration outranks volume: four items from two
+           outlets are a weaker brief than three items from three. */
+        let winner = buckets
+            .filter { $0.value.count >= minSize && distinctSources($0.value) >= minSources }
+            .max { a, b in
+                let (sa, sb) = (distinctSources(a.value), distinctSources(b.value))
+                if sa != sb { return sa < sb }
+                if a.value.count != b.value.count { return a.value.count < b.value.count }
+                return a.key > b.key          // deterministic on a full tie
+            }
+        return winner.map { (key: $0.key, items: $0.value) }
     }
 
     static func rows(model: WorkspaceModel,
@@ -95,7 +152,7 @@ enum DeskBuilder {
             out.append(DeskRow(
                 kind: .opportunity,
                 title: "\(c.items.count) items circling “\(c.key)”",
-                detail: c.items.prefix(2).map { $0.title }.joined(separator: " · "),
+                detail: c.items.prefix(2).map { $0.displayTitle }.joined(separator: " · "),
                 badge: "\(sources) source\(sources == 1 ? "" : "s")",
                 action: openQueue))
         }
