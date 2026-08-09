@@ -8,15 +8,44 @@ export interface RssItem {
   guid: string | null
 }
 
-function decodeEntities(s: string): string {
+/* Numeric entities are decoded generically rather than one at a time. The
+   hand-written list covered &#39; and stopped there, so a Politico headline
+   arrived in the app reading
+     Germany battling &#8220;daily&#8221; hybrid warfare attacks
+   — the curly quotes publishers actually use. Named entities keep their
+   explicit list (there are ~2000 of them and this parser needs five), but
+   &#NNN; and &#xHH; are mechanical and there is no reason to enumerate them.
+   Order matters: numerics run BEFORE &amp;, so a literal "&amp;#8220;" is not
+   collapsed into a quote it never was. */
+function decodeNumeric(s: string): string {
   return s
+    .replace(/&#(\d+);/g, (_, d) => safeChar(parseInt(d, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => safeChar(parseInt(h, 16)))
+    /* A dangling entity with no semicolon is the tail of one that a length
+       limit cut in half. A real headline arrived as
+         "…countermeasure sanctions list &#0"
+       Decoding it is impossible and showing it is noise, so it goes. */
+    .replace(/&#x?[0-9a-fA-F]*$/, "")
+}
+
+/* Code points outside the Unicode range would throw, and C0 control characters
+   are never what a headline meant — a feed that ships either is broken, but it
+   should not take the run down with it or plant invisible junk in a title. */
+function safeChar(code: number): string {
+  if (!Number.isFinite(code) || code > 0x10ffff) return ""
+  if (code < 32 && code !== 9 && code !== 10) return ""
+  try { return String.fromCodePoint(code) } catch { return "" }
+}
+
+function decodeEntities(s: string): string {
+  return decodeNumeric(s)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
