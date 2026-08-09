@@ -40,7 +40,21 @@ final class CockpitStore: ObservableObject {
     @Published var projects: [Project] = []
     @Published var sites: [SiteProject] = []
 
-    @Published var lastFetched: String = ""
+    /// The tracker's own fetch metadata. It was already arriving with every
+    /// load and only `lastFetched` was kept — into a property nothing read.
+    @Published var trackerMeta: TrackerMeta?
+    var lastFetched: String { trackerMeta?.lastFetched ?? "" }
+
+    /// Non-nil when the data behind the site's "updated daily" has stalled.
+    /// See `TrackerFreshness` for why an empty changelog cannot show this.
+    var trackerFreshnessAlarm: String? {
+        guard let m = trackerMeta else { return nil }
+        return TrackerFreshness.verdict(lastFetched: m.lastFetched,
+                                        success: m.fetchSuccess,
+                                        errors: m.fetchErrors ?? [],
+                                        now: Date())
+    }
+
     @Published var isLoading = false
     /// projects.json problems only — feed problems are per-feed below.
     @Published var errorMessage: String?
@@ -136,7 +150,7 @@ final class CockpitStore: ObservableObject {
         do {
             let feed: TrackerFeed = try await fetch(.tracker)
             regulations = feed.data
-            lastFetched = feed.meta?.lastFetched ?? ""
+            trackerMeta = feed.meta
             markLoaded(.tracker)
         } catch { record(.tracker, error) }
     }

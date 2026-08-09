@@ -61,6 +61,8 @@ struct TrackerFeed: Decodable {
 struct TrackerMeta: Decodable {
     let lastFetched: String?
     let fetchSuccess: Bool?
+    /// Written by fetch-tracker-data.js and, until now, read by nothing.
+    let fetchErrors: [String]?
 }
 
 enum RegStatus: String {

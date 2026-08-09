@@ -23,6 +23,10 @@ struct DeskRow: Identifiable {
     let title: String
     let detail: String
     let badge: String
+    /// What a click costs, in the row's own words ("open as a brief").
+    /// Shown on hover — a worklist row that does not say what it does is
+    /// a dashboard tile with extra steps.
+    var hint: String = ""
     var action: (() -> Void)?
 
     var tint: Color {
@@ -48,7 +52,7 @@ enum DeskBuilder {
     /// Words that describe what happened rather than what it happened to.
     /// "3 items circling 'adds'" is not a subject, and the first build of this
     /// screen offered exactly that as a story worth writing.
-    private static let stop: Set<String> = [
+    nonisolated static let stop: Set<String> = [
         "the", "and", "for", "with", "from", "that", "this", "new", "its", "his", "her",
         "will", "have", "has", "been", "more", "than", "what", "when", "where", "which",
         "while", "their", "there", "these", "those", "after", "into", "over", "amid",
@@ -66,7 +70,7 @@ enum DeskBuilder {
         "auch", "noch", "aber", "oder", "zum", "zur", "des", "als", "ist", "sind"
     ]
 
-    private static func keywords(_ it: ReviewQueueItem) -> Set<String> {
+    nonisolated static func keywords(_ it: ReviewQueueItem) -> Set<String> {
         let words = it.displayTitle.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { $0.count > 3 && !stop.contains($0) && Int($0) == nil }
@@ -128,8 +132,10 @@ enum DeskBuilder {
 
     static func rows(model: WorkspaceModel,
                      radarUnseen: Int,
+                     radarAlarm: String?,
                      openQueue: @escaping () -> Void,
-                     openEntry: @escaping (ContentEntry) -> Void) -> [DeskRow] {
+                     openEntry: @escaping (ContentEntry) -> Void,
+                     seedDraft: @escaping (String, [ReviewQueueItem]) -> Void) -> [DeskRow] {
         var out: [DeskRow] = []
 
         // 1 · Contradictions first. They mean a number on screen is wrong.
@@ -145,16 +151,26 @@ enum DeskBuilder {
             out.append(DeskRow(kind: .alarm, title: "Deploys could not be read",
                                detail: err, badge: "failed", action: nil))
         }
+        /* The site promises daily EUR-Lex verification. When the data behind
+           that promise stalls, the promise becomes the false claim — and this
+           app is the only thing that reads both the promise and the data. */
+        if let stale = radarAlarm {
+            out.append(DeskRow(kind: .alarm, title: "The tracker has stopped being fed",
+                               detail: stale, badge: "stale", action: nil))
+        }
 
         // 2 · Opportunities — clusters that are ready to become a brief.
+        //     The row opens the draft. Naming what a click costs is the
+        //     difference between a worklist and a dashboard.
         for c in clusters(model.reviewQueue) {
-            let sources = Set(c.items.compactMap { $0.source_name }).count
+            let sources = distinctSources(c.items)
             out.append(DeskRow(
                 kind: .opportunity,
                 title: "\(c.items.count) items circling “\(c.key)”",
                 detail: c.items.prefix(2).map { $0.displayTitle }.joined(separator: " · "),
                 badge: "\(sources) source\(sources == 1 ? "" : "s")",
-                action: openQueue))
+                hint: "open as a brief",
+                action: { seedDraft(c.key, c.items) }))
         }
 
         // 3 · Drafts that have stopped moving. A finished draft nobody
@@ -169,6 +185,7 @@ enum DeskBuilder {
                                title: "“\(d.title)” has been a draft for \(age) days",
                                detail: "\(d.words) words, ready to read",
                                badge: "stalled",
+                               hint: "open the draft",
                                action: { openEntry(d) }))
         }
 
@@ -182,8 +199,15 @@ enum DeskBuilder {
     }
 
     /// The other half: everything that is fine, in one sentence.
-    static func quiet(model: WorkspaceModel) -> [String] {
+    ///
+    /// `trackerFetched` is passed in rather than assumed: "the tracker is
+    /// current" is only allowed on the QUIET line if something actually
+    /// checked, which is the entire lesson of the empty waiting list.
+    static func quiet(model: WorkspaceModel, trackerFetched: String? = nil) -> [String] {
         var q: [String] = []
+        if let raw = trackerFetched, let when = TrackerFreshness.parseISO(raw) {
+            q.append("tracker fetched \(LoadState<Int>.ago(when))")
+        }
         if case .loaded(let rows, let at) = model.reviewQueueState, !rows.isEmpty {
             q.append("\(rows.count) in the waiting list, checked \(LoadState<Int>.ago(at))")
         }
@@ -211,12 +235,16 @@ extension DateFormatter {
 struct DeskView: View {
     @ObservedObject var model: WorkspaceModel
     @ObservedObject var radar = RadarStore.shared
+    @EnvironmentObject var store: CockpitStore
     var openQueue: () -> Void
     var openEntry: (ContentEntry) -> Void
+    var seedDraft: (String, [ReviewQueueItem]) -> Void
 
     private var rows: [DeskRow] {
         DeskBuilder.rows(model: model, radarUnseen: radar.unseenCount,
-                         openQueue: openQueue, openEntry: openEntry)
+                         radarAlarm: store.trackerFreshnessAlarm,
+                         openQueue: openQueue, openEntry: openEntry,
+                         seedDraft: seedDraft)
     }
 
     var body: some View {
@@ -247,7 +275,7 @@ struct DeskView: View {
             Image(systemName: "checkmark.circle").foregroundColor(.stApplied)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Nothing needs you").font(.system(size: 15, weight: .semibold))
-                Text(DeskBuilder.quiet(model: model).joined(separator: " · "))
+                Text(DeskBuilder.quiet(model: model, trackerFetched: store.trackerMeta?.lastFetched).joined(separator: " · "))
                     .font(.caption).foregroundColor(.textSecondary)
             }
             Spacer()
@@ -259,7 +287,8 @@ struct DeskView: View {
     }
 
     private var quietLine: some View {
-        Text(DeskBuilder.quiet(model: model).joined(separator: "  ·  "))
+        Text(DeskBuilder.quiet(model: model, trackerFetched: store.trackerMeta?.lastFetched)
+            .joined(separator: "  ·  "))
             .font(.system(size: 11, design: .monospaced))
             .foregroundColor(.textSecondary)
             .padding(.top, 2)
@@ -285,6 +314,11 @@ private struct DeskRowView: View {
                     Text(row.detail)
                         .font(.caption).foregroundColor(.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if hovering, !row.hint.isEmpty, row.action != nil {
+                    Text("→ " + row.hint)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(row.tint)
                 }
             }
             Spacer(minLength: 8)

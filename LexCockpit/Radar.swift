@@ -34,6 +34,52 @@ extension ChangelogEntry {
     }
 }
 
+/// Is the tracker still being fed?
+///
+/// An empty changelog is the *correct* answer almost every day — the five
+/// watched fields across eight regulations change a handful of times a
+/// year. That is exactly what makes it dangerous: "no changes recorded"
+/// looks identical whether EUR-Lex was quiet or the daily workflow has
+/// been failing for a week. The tracker page says "updated daily" in two
+/// places, and if the data behind it froze, that sentence is the false
+/// claim — not anything in the changelog.
+///
+/// The app is the right place to catch it: it reads both the changelog and
+/// the data file, and it is not the thing making the promise.
+enum TrackerFreshness {
+    /// The page promises daily. One missed run plus margin.
+    static let staleAfterHours = 36.0
+
+    static func verdict(lastFetched: String?, success: Bool?,
+                        errors: [String], now: Date) -> String? {
+        if !errors.isEmpty {
+            let head = errors.prefix(2).joined(separator: "; ")
+            return "The last EUR-Lex fetch reported \(errors.count) error"
+                 + "\(errors.count == 1 ? "" : "s"): \(head)"
+        }
+        if success == false {
+            return "The last EUR-Lex fetch did not report success, so the tracker "
+                 + "dates on the site may be older than they look."
+        }
+        guard let raw = lastFetched, let when = parseISO(raw) else {
+            return "tracker.json carries no readable fetch timestamp, so the "
+                 + "site's “updated daily” cannot be checked."
+        }
+        let hours = now.timeIntervalSince(when) / 3600
+        guard hours > staleAfterHours else { return nil }
+        let age = hours < 48 ? "\(Int(hours)) hours" : "\(Int(hours / 24)) days"
+        return "The tracker page says “updated daily”, but tracker.json was last "
+             + "fetched \(age) ago. The promise is now the wrong part."
+    }
+
+    static func parseISO(_ s: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFraction.date(from: s) { return d }
+        return ISO8601DateFormatter().date(from: s)
+    }
+}
+
 @MainActor
 final class RadarStore: ObservableObject {
     static let shared = RadarStore()
