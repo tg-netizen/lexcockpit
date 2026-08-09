@@ -91,4 +91,39 @@ enum SupabaseAPI {
         }
         return try JSONDecoder().decode([ReviewQueueItem].self, from: data)
     }
+
+    /// What the most recent ingest run believed it had queued.
+    ///
+    /// This exists for one comparison. On 9 August 2026 the run reported 34
+    /// items queued and the waiting list returned none, because the anon RLS
+    /// policies were missing and PostgREST answered 200 with `[]`. Neither
+    /// side was wrong on its own; only the disagreement was informative, and
+    /// this app is the only thing in the stack that sees both.
+    ///
+    /// Failure is silent by design — a missing telemetry table must never
+    /// stop the queue from loading. The caller treats nil as "no opinion".
+    static func lastRunItemsQueued() async throws -> Int? {
+        guard let key = Keychain.get(Keychain.supabaseAnonKey), !key.isEmpty else { return nil }
+        let base = configuredURL().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard var comps = URLComponents(string: "\(base)/rest/v1/pipeline_runs") else { return nil }
+        comps.queryItems = [
+            URLQueryItem(name: "select", value: "items_queued,started_at,status"),
+            URLQueryItem(name: "order", value: "started_at.desc"),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12
+        req.setValue(key, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+
+        let started = Date()
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        diagRecord("supabase", "GET pipeline_runs", status: "\(code)", start: started, ok: code < 300)
+        guard (200..<300).contains(code) else { return nil }
+
+        struct Run: Decodable { let items_queued: Int? }
+        return (try? JSONDecoder().decode([Run].self, from: data))?.first?.items_queued
+    }
 }

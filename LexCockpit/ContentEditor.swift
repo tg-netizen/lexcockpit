@@ -467,16 +467,15 @@ extension WorkspaceModel {
 
     func loadContentList() async {
         guard let repo = site.repo, !repo.isEmpty else {
-            contentError = "No repo configured for this project (projects.json)."
+            contentState = .failed("No repo configured for this project (projects.json).", at: Date())
             return
         }
         let paths = site.content_paths ?? []
         guard !paths.isEmpty else {
-            contentError = "No content_paths configured for this project (projects.json)."
+            contentState = .failed("No content_paths configured for this project (projects.json).", at: Date())
             return
         }
-        contentLoading = true
-        contentError = nil
+        contentState.beginLoading()
         var entries: [ContentEntry] = []
         var cache = loadContentCache()
         do {
@@ -541,11 +540,10 @@ extension WorkspaceModel {
                              aiGenerated: e.aiGenerated ?? false,
                              reviewRequired: e.reviewRequired ?? false)
             }
-            contentEntries = entries.sorted { $0.date > $1.date }
+            contentState = .loaded(entries.sorted { $0.date > $1.date }, at: Date())
         } catch {
-            contentError = error.localizedDescription
+            contentState = .failed(error.localizedDescription, at: Date())
         }
-        contentLoading = false
     }
 
     func openEntry(_ entry: ContentEntry) async {
@@ -557,7 +555,7 @@ extension WorkspaceModel {
         do {
             let f = try await GitHubAPI.file(repo: repo, path: entry.path)
             guard let text = f.decodedText() else {
-                contentError = "Could not decode \(entry.name)."
+                contentState = .failed("Could not decode \(entry.name).", at: Date())
                 return
             }
             let doc = EditorDocument(repoPath: entry.path, text: text, sha: f.sha, isNew: false)
@@ -569,7 +567,7 @@ extension WorkspaceModel {
             }
             attachEditor(doc)
         } catch {
-            contentError = error.localizedDescription
+            contentState = .failed(error.localizedDescription, at: Date())
         }
     }
 
