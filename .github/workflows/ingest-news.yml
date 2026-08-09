@@ -1,6 +1,17 @@
 # Optional external cron that triggers the Supabase Edge Function.
-# Requires repository secrets:
-#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CRON_SECRET
+#
+# Repository secrets:
+#   CRON_SECRET             — required. This is the actual gate.
+#   SUPABASE_ANON_KEY       — required. Public by design; it ships inside the
+#                             Mac app. It only has to satisfy the gateway's
+#                             verify_jwt check, which any legacy-signed key does.
+#   SUPABASE_URL            — optional, defaults below.
+#
+# It used to demand SUPABASE_SERVICE_ROLE_KEY, which is the project's master
+# credential — it bypasses RLS entirely. The function never needed that: the
+# gateway is happy with the anon key and authorized() checks CRON_SECRET. CI had
+# been handed full database access to make one authenticated POST. It is still
+# accepted if set, so an existing configuration keeps working.
 name: Ingest news drafts
 
 on:
@@ -20,20 +31,25 @@ jobs:
       - name: Trigger ingest-news Edge Function
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
-          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-            echo "Skipping — SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured."
+          URL="${SUPABASE_URL:-https://fstoenrocfyzdsgmiknj.supabase.co}"
+          # Least privilege: prefer the anon key, fall back to service role only
+          # if that is what the repository already has configured.
+          BEARER="${SUPABASE_ANON_KEY:-${SUPABASE_SERVICE_ROLE_KEY:-}}"
+          if [ -z "$BEARER" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "Skipping — set CRON_SECRET and SUPABASE_ANON_KEY in repository secrets."
             exit 0
           fi
           QS=""
           if [ "$DRY_RUN" = "true" ]; then QS="?dry_run=1"; fi
           curl -fsS -X POST \
-            "${SUPABASE_URL%/}/functions/v1/ingest-news${QS}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "x-cron-secret: ${CRON_SECRET:-}" \
+            "${URL%/}/functions/v1/ingest-news${QS}" \
+            -H "Authorization: Bearer ${BEARER}" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
             -H "Content-Type: application/json" \
             -d "{\"trigger\":\"github-actions\",\"run\":\"${GITHUB_RUN_ID}\"}"
