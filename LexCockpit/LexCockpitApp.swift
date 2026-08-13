@@ -202,7 +202,7 @@ struct LocalMarkdownWindow: View {
 }
 
 enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
-    case dashboard, radar, analytics, tracker, pipeline, trilogue, enforcement
+    case dashboard, radar, analytics, tracker, defence, pipeline, trilogue, enforcement
     var id: String { rawValue }
 
     var title: String {
@@ -211,6 +211,7 @@ enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
         case .radar:       return "Radar"
         case .analytics:   return "Analytics"
         case .tracker:     return "Tracker"
+        case .defence:     return "Defence"
         case .pipeline:    return "Pipeline"
         case .trilogue:    return "Trilogue"
         case .enforcement: return "Enforcement"
@@ -223,6 +224,7 @@ enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
         case .radar:       return "dot.radiowaves.left.and.right"
         case .analytics:   return "chart.bar"
         case .tracker:     return "calendar"
+        case .defence:     return "shield.lefthalf.filled"
         case .pipeline:    return "tray.full"
         case .trilogue:    return "person.3"
         case .enforcement: return "eurosign.circle"
@@ -454,7 +456,7 @@ struct ContentView: View {
                 }
 
                 eyebrow("Topics").padding(.top, 14)
-                ForEach([CockpitSection.tracker, .pipeline, .trilogue, .enforcement]) { s in
+                ForEach([CockpitSection.tracker, .defence, .pipeline, .trilogue, .enforcement]) { s in
                     sideRow(.section(s), title: s.title, icon: s.icon)
                 }
 
@@ -534,6 +536,7 @@ struct ContentView: View {
         case .section(.radar):       RadarView()
         case .section(.analytics):   AnalyticsView()
         case .section(.tracker):     TrackerView()
+        case .section(.defence):     DefenceEditorView()
         case .section(.pipeline):    PipelineView()
         case .section(.trilogue):    TrilogueView()
         case .section(.enforcement): EnforcementView()
