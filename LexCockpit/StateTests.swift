@@ -238,6 +238,77 @@ func runStateSelfTests() -> Bool {
     expect(TrackerFreshness.parseISO("2026-08-09T07:53:26Z") != nil,
            "tracker: a timestamp without fractional seconds also parses")
 
+    // ── The defence desk's own rule, made unbreakable ───────────────────
+    // data/defence-programmes.json states: "Rows without a citable public
+    // source are not published; the categories they would cover are listed
+    // as gaps instead." These tests are that sentence.
+    let clock = Fitment.day("2026-08-13")!
+
+    var good = Fitment()
+    good.category = "Platform"; good.system = "Construction"; good.supplier = "tkMS / NVL"
+    good.tier = "Prime"; good.status = "confirmed"
+    good.quote = "tkMS eine deutliche Mehrheit der Anteile hält"
+    good.sourcePublisher = "hartpunkt.de"
+    good.sourceURL = "https://www.hartpunkt.de/f127-beschaffungsprozess/"
+    good.retrieved = "2026-08-05"
+    expect(good.problems(today: clock).isEmpty, "defence: a fully sourced row is publishable")
+
+    var noSource = good; noSource.sourceURL = ""
+    expect(noSource.problems(today: clock).contains { $0.contains("source URL") },
+           "defence: confirmed without a document is blocked")
+
+    var noQuote = good; noQuote.quote = "   "
+    expect(noQuote.problems(today: clock).contains { $0.contains("verbatim quote") },
+           "defence: confirmed without the quote it rests on is blocked")
+
+    var noDate = good; noDate.retrieved = ""
+    expect(noDate.problems(today: clock).contains { $0.contains("retrieval date") },
+           "defence: confirmed without a retrieval date is blocked")
+
+    var planned = good
+    planned.status = "planned"; planned.sourceURL = ""; planned.quote = ""; planned.retrieved = ""
+    expect(planned.problems(today: clock).isEmpty,
+           "defence: a stated intention may be recorded without a contract document")
+
+    var future = good; future.retrieved = "2027-01-01"
+    expect(future.problems(today: clock).contains { $0.contains("future") },
+           "defence: a row cannot have been read tomorrow")
+
+    var malformed = good; malformed.retrieved = "5 Aug 2026"
+    expect(malformed.problems(today: clock).contains { $0.contains("yyyy-MM-dd") },
+           "defence: the retrieval date must be a date the site can sort")
+
+    var notALink = good; notALink.sourceURL = "hartpunkt.de/f127"
+    expect(notALink.problems(today: clock).contains { $0.contains("not a link") },
+           "defence: a source that cannot be opened is not a source")
+
+    var nameless = good; nameless.supplier = ""
+    expect(nameless.problems(today: clock).contains { $0.contains("supplier") },
+           "defence: a supplier row names a supplier")
+
+    // The snapshot rule: fine to publish, but say how old it is.
+    expect(good.staleness(today: clock) == nil, "defence: a row read 8 days ago is current")
+    var old = good; old.retrieved = "2025-06-01"
+    expect((old.staleness(today: clock) ?? 0) > Fitment.staleAfterDays,
+           "defence: a row past its shelf life is flagged, not hidden")
+    expect(old.problems(today: clock).isEmpty,
+           "defence: staleness warns — it never blocks, because old is not wrong")
+
+    // The evidence scale comes from the file, so the picker cannot drift.
+    let fromFile = EvidenceScale(meta: ["status_scale": [
+        "confirmed": "Contract, official document or parliamentary record",
+        "reported": "Reported by specialist press as decided; no contract document seen"]])
+    expect(fromFile.levels.map { $0.key } == ["confirmed", "reported"],
+           "defence: the scale is read from the file, strongest first")
+    expect(EvidenceScale(meta: nil).levels.count == 5,
+           "defence: a file without a scale falls back to the published five")
+
+    // Round-trip: the dictionary the file gets back is the row it was given.
+    let round = Fitment(good.dictionary)
+    expect(round.supplier == good.supplier && round.quote == good.quote
+           && round.retrieved == good.retrieved && round.status == good.status,
+           "defence: a row survives the trip through the file unchanged")
+
     // ── The updater's version comparison, which shipped untested ────────
     expect(UpdateChecker.isNewer("0.26.0", than: "0.25.0"), "update: 0.26.0 > 0.25.0")
     expect(!UpdateChecker.isNewer("0.25.0", than: "0.25.0"), "update: equal is not newer")
