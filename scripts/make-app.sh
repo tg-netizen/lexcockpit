@@ -5,7 +5,7 @@
 # release.yml overrides it with the pushed tag.
 set -euo pipefail
 
-VERSION="${1:-0.28.0}"
+VERSION="${1:-0.29.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

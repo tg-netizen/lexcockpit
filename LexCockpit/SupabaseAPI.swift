@@ -100,6 +100,15 @@ struct ReviewQueueItem: Identifiable, Decodable, Hashable {
     var displayTitle: String { title.decodingHTMLEntities }
     var displaySnippet: String { (snippet ?? "").decodingHTMLEntities }
 
+    /// Retention, mirrored from the ingest function's default so the app can
+    /// warn before a row disappears rather than after.
+    static let retainQueuedDays = 30
+
+    var ageDays: Int? {
+        guard let c = created_at, let d = TrackerFreshness.parseISO(c) else { return nil }
+        return Int(Date().timeIntervalSince(d) / 86_400)
+    }
+
     var scoreLabel: String {
         guard let s = relevance_score else { return "—" }
         return String(format: "%.0f%%", s * 100)
@@ -199,5 +208,42 @@ enum SupabaseAPI {
 
         struct Run: Decodable { let items_queued: Int? }
         return (try? JSONDecoder().decode([Run].self, from: data))?.first?.items_queued
+    }
+
+    /// What the last ingest run did, and when.
+    ///
+    /// "I do not have the feeling it is happening" is not a bug report, it is
+    /// the absence of one — the app never showed whether the pipeline ran, so
+    /// there was nothing to disbelieve. A schedule you cannot see is a
+    /// schedule you have to trust, and this project does not run on trust.
+    struct LastRun: Decodable {
+        let started_at: String?
+        let finished_at: String?
+        let status: String?
+        let items_queued: Int?
+        let sources_scanned: Int?
+        let details: AnyJSON?
+    }
+
+    static func lastRun() async throws -> LastRun? {
+        guard let key = Keychain.get(Keychain.supabaseAnonKey), !key.isEmpty else { return nil }
+        let base = configuredURL().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard var comps = URLComponents(string: "\(base)/rest/v1/pipeline_runs") else { return nil }
+        comps.queryItems = [
+            URLQueryItem(name: "select", value: "started_at,finished_at,status,items_queued,sources_scanned,details"),
+            URLQueryItem(name: "order", value: "started_at.desc"),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12
+        req.setValue(key, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        let started = Date()
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        diagRecord("supabase", "GET pipeline_runs (last)", status: "\(code)", start: started, ok: code < 300)
+        guard (200..<300).contains(code) else { return nil }
+        return (try? JSONDecoder().decode([LastRun].self, from: data))?.first
     }
 }

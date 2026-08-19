@@ -309,6 +309,31 @@ func runStateSelfTests() -> Bool {
            && round.retrieved == good.retrieved && round.status == good.status,
            "defence: a row survives the trip through the file unchanged")
 
+    // ── Retention and the pipeline heartbeat ────────────────────────────
+    func aged(_ days: Int) -> ReviewQueueItem {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return ReviewQueueItem(id: UUID().uuidString, title: "t", source_url: nil, snippet: nil,
+                               published_at: nil, relevance_score: nil, relevance_reason: nil,
+                               status: "queued",
+                               created_at: f.string(from: Date().addingTimeInterval(-Double(days) * 86_400)),
+                               source_name: "S", source_slug: nil, region: nil)
+    }
+    expect((aged(3).ageDays ?? -1) == 3, "retention: an item knows how long it has waited")
+    expect(aged(3).ageDays! < ReviewQueueItem.retainQueuedDays - 7,
+           "retention: a fresh item shows no countdown")
+    expect(aged(26).ageDays! >= ReviewQueueItem.retainQueuedDays - 7,
+           "retention: the countdown starts a week before deletion, not on the day")
+    expect(ReviewQueueItem.retainQueuedDays == 30,
+           "retention: the app mirrors the ingest function's 30-day default")
+
+    let undated = ReviewQueueItem(id: "x", title: "t", source_url: nil, snippet: nil,
+                                  published_at: nil, relevance_score: nil, relevance_reason: nil,
+                                  status: "queued", created_at: nil, source_name: nil,
+                                  source_slug: nil, region: nil)
+    expect(undated.ageDays == nil,
+           "retention: an item with no timestamp is never counted down — unknown is not old")
+
     // ── The updater's version comparison, which shipped untested ────────
     expect(UpdateChecker.isNewer("0.26.0", than: "0.25.0"), "update: 0.26.0 > 0.25.0")
     expect(!UpdateChecker.isNewer("0.25.0", than: "0.25.0"), "update: equal is not newer")
