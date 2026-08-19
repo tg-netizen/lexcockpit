@@ -75,6 +75,48 @@ final class WorkspaceModel: ObservableObject {
     /* What the last ingest run believed it had queued. Held beside the
        queue itself so the two can be compared — see contradiction(). */
     @Published var lastRunQueued: Int?
+    @Published var lastRun: SupabaseAPI.LastRun?
+    private var pollTask: Task<Void, Never>?
+
+    /// How often the waiting list reloads while the workspace is open.
+    ///
+    /// The ingest schedule is every two hours, so polling faster buys
+    /// nothing; polling slower means the app can sit for a whole working day
+    /// showing a number that stopped being true before lunch. Five minutes is
+    /// cheap — one PostgREST select — and it is what turns "I don't have the
+    /// feeling it updates" into a screen that visibly moves.
+    static let pollSeconds: UInt64 = 300
+
+    func startPolling() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: WorkspaceModel.pollSeconds * 1_000_000_000)
+                if Task.isCancelled { return }
+                await self?.loadReviewQueue()
+            }
+        }
+    }
+
+    func stopPolling() { pollTask?.cancel(); pollTask = nil }
+
+    /// When the pipeline last ran, in the words a person would use.
+    var pipelineLine: String? {
+        guard let r = lastRun else { return nil }
+        let stamp = r.finished_at ?? r.started_at
+        guard let iso = stamp, let when = TrackerFreshness.parseISO(iso) else {
+            return "Pipeline: no run recorded yet."
+        }
+        let ago = LoadState<Int>.ago(when)
+        let n = r.items_queued ?? 0
+        let src = r.sources_scanned.map { " · \($0) sources" } ?? ""
+        let state = (r.status ?? "").isEmpty ? "" : " · \(r.status!)"
+        /* Ingest runs every two hours. Past three, something is wrong with the
+           schedule and the number on this screen is older than it looks. */
+        let stale = Date().timeIntervalSince(when) > 3 * 3600
+        return (stale ? "⚠ Pipeline last ran \(ago)" : "Pipeline ran \(ago)")
+            + " · \(n) queued\(src)\(state)"
+    }
 
     let preview = PreviewController()
 
@@ -148,7 +190,9 @@ final class WorkspaceModel: ObservableObject {
         }
         reviewQueueState.beginLoading()
         do {
+            async let run = try? SupabaseAPI.lastRun()
             let rows = try await SupabaseAPI.listReviewQueue()
+            lastRun = await run
             reviewQueueState = .loaded(rows, at: Date())
         } catch {
             reviewQueueState = .failed(error.localizedDescription, at: Date())
@@ -458,7 +502,9 @@ struct OverviewTabView: View {
         .task {
             if model.contentEntries.isEmpty { await model.loadContentList() }
             await model.loadReviewQueue()
+            model.startPolling()
         }
+        .onDisappear { model.stopPolling() }
     }
 
     @ViewBuilder private var waitingListSection: some View {
@@ -475,6 +521,16 @@ struct OverviewTabView: View {
                 Text(model.reviewQueueState.provenance(source: "review_queue"))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.textSecondary)
+            }
+
+            /* Whether the schedule is alive, said out loud. Reading a queue
+               tells you what is in it, never whether anything is still being
+               put there — and a list that stopped being fed looks exactly
+               like a quiet week. Refreshes itself every five minutes. */
+            if let line = model.pipelineLine {
+                Text(line)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(line.hasPrefix("⚠") ? .statusAmber : .textSecondary)
             }
 
             if !SupabaseAPI.isConfigured() {
@@ -577,6 +633,12 @@ struct ReviewQueueRow: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.statusAmber)
                         .help(item.relevance_reason ?? "Keyword score")
+                    if let d = item.ageDays, d >= ReviewQueueItem.retainQueuedDays - 7 {
+                        Text("\(ReviewQueueItem.retainQueuedDays - d) d left")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.statusRed)
+                            .help("Queued items are deleted after \(ReviewQueueItem.retainQueuedDays) days.")
+                    }
                 }
                 Text(item.displayTitle)
                     .font(.system(size: 14, weight: .semibold))

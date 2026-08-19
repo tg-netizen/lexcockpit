@@ -357,6 +357,46 @@ Deno.serve(async (req) => {
       }
     }
 
+    /* ── Retention ───────────────────────────────────────────────────
+       A waiting list only grows. Left alone it becomes an archive nobody
+       reads and, worse, a number on the Desk that stops meaning "work to
+       do" — which is the one thing that number is for.
+
+       Two different ages, because the two states are not the same thing.
+       An item still queued after RETAIN_QUEUED days was looked at and not
+       taken; it is stale news and goes. An item already dealt with is kept
+       longer, because dedup runs on source_url and deleting a handled row
+       lets the same article come back as new.
+
+       Deletion is reported in the run record. A cleanup nobody can see is
+       indistinguishable from a bug. */
+    const RETAIN_QUEUED = Number(Deno.env.get("RETAIN_QUEUED_DAYS") ?? "30")
+    const RETAIN_HANDLED = Number(Deno.env.get("RETAIN_HANDLED_DAYS") ?? "180")
+    const ago = (d: number) => new Date(Date.now() - d * 86400000).toISOString()
+    let purgedQueued = 0
+    let purgedHandled = 0
+    try {
+      const { data: pq } = await supabase
+        .from("ingested_items")
+        .delete()
+        .eq("status", "queued")
+        .lt("created_at", ago(RETAIN_QUEUED))
+        .select("id")
+      purgedQueued = (pq ?? []).length
+
+      const { data: ph } = await supabase
+        .from("ingested_items")
+        .delete()
+        .not("status", "in", '("queued","fetched")')
+        .lt("created_at", ago(RETAIN_HANDLED))
+        .select("id")
+      purgedHandled = (ph ?? []).length
+    } catch (e) {
+      /* Retention must never take the ingest down with it: a failed cleanup
+         costs disk, a failed ingest costs the day's news. */
+      errors.push(`retention: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
     const status = errors.length === 0 ? "ok" : (itemsQueued > 0 || draftsCreated > 0 || itemsNew > 0 ? "partial" : "error")
     await supabase.from("pipeline_runs").update({
       finished_at: new Date().toISOString(),
@@ -367,7 +407,9 @@ Deno.serve(async (req) => {
       items_relevant: itemsRelevant,
       drafts_created: draftsCreated,
       error_message: errors.length ? errors.slice(0, 8).join(" | ") : null,
-      details: { errors: errors.slice(0, 40), dry_run: dryRun, mode, items_queued: itemsQueued },
+      details: { errors: errors.slice(0, 40), dry_run: dryRun, mode, items_queued: itemsQueued,
+                 purged_queued: purgedQueued, purged_handled: purgedHandled,
+                 retain_queued_days: RETAIN_QUEUED, retain_handled_days: RETAIN_HANDLED },
     }).eq("id", runId)
 
     return json({
