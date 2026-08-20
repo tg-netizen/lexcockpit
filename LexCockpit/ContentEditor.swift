@@ -274,6 +274,11 @@ final class EditorDocument: ObservableObject, Identifiable {
         exposedDoc.scalar("type") ?? ""
     }
 
+    /// The site's escape hatch, verbatim from the frontmatter.
+    var overrideFlag: String { exposedDoc.scalar("allow_placeholder_publish") ?? "" }
+    var overrideUntil: String { exposedDoc.scalar("allow_placeholder_publish_until") ?? ""
+    }
+
     enum PublishState { case draft, scheduled(String), published }
     var publishState: PublishState {
         if !isDraft { return .published }
@@ -1842,7 +1847,7 @@ struct EditorView: View {
             /* The first three lines are advice: a missing tag is untidy, not
                fatal. The last two are the build's own rules, so they are not
                advice at all — the deploy stops on them. */
-            if let blocker = EditorialGate.blocker(body: doc.bodyText, type: doc.articleType) {
+            if let blocker = EditorialGate.blocker(body: doc.bodyText, type: doc.articleType, overrideFlag: doc.overrideFlag, overrideUntil: doc.overrideUntil) {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Label("The build will refuse this", systemImage: "xmark.octagon.fill")
@@ -1869,7 +1874,7 @@ struct EditorView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.accentNavy)
-            .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType) != nil)
+            .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType, overrideFlag: doc.overrideFlag, overrideUntil: doc.overrideUntil) != nil)
 
             HStack(spacing: 8) {
                 DatePicker("", selection: $scheduleDate, in: Date()..., displayedComponents: .date)
@@ -1881,7 +1886,7 @@ struct EditorView: View {
                 }
                 /* Scheduling is publishing with a delay: the daily build flips
                    the status and then trips over the same gate. */
-                .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType) != nil)
+                .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType, overrideFlag: doc.overrideFlag, overrideUntil: doc.overrideUntil) != nil)
             }
             Text("Scheduled = stays a draft until the site’s daily build flips it on the chosen date.")
                 .font(.caption2).foregroundColor(.textSecondary)
@@ -2731,7 +2736,26 @@ enum EditorialGate {
     /// The reason the build would refuse this body, or nil when it would pass.
     /// Only the two conditions that actually call process.exit(1) count here;
     /// a missing tag or cover image is untidy, not fatal.
-    nonisolated static func blocker(body: String, type: String) -> String? {
+    /// True when the article carries the site's escape hatch AND a date that
+    /// has not passed. scripts/editorial-check.js treats a missing or expired
+    /// date as no override at all, and so must this.
+    nonisolated static func overrideActive(flag: String, until: String) -> Bool {
+        guard flag.trimmingCharacters(in: .whitespaces).lowercased() == "true" else { return false }
+        let d = until.trimmingCharacters(in: .whitespaces)
+        guard d.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+        else { return false }
+        let today = ISO8601DateFormatter.string(from: Date(), timeZone: TimeZone(identifier: "UTC")!,
+                                                formatOptions: [.withFullDate])
+        return d >= today
+    }
+
+    nonisolated static func blocker(body: String, type: String,
+                                    overrideFlag: String = "", overrideUntil: String = "") -> String? {
+        /* The site lets an unfinished article through when it is explicitly
+           marked and given an expiry date. Refusing here would make the app
+           stricter than the build, which is the same class of mismatch that
+           caused the original breakage, only pointing the other way. */
+        if overrideActive(flag: overrideFlag, until: overrideUntil) { return nil }
         if let phrase = placeholder(in: body) {
             return "The body still contains “\(phrase)”. scripts/editorial-check.js "
                  + "rejects placeholder text in a published article."
