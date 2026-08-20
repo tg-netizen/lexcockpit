@@ -112,6 +112,11 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var canvaCoverDesign: String = ""   // invisible frontmatter metadata
     var blockVault: [String] = []                  // originals behind canvas block cards
     @Published var scheduledAt: String = ""        // scheduled_publish_at (yyyy-MM-dd)
+    /* The site's escape hatch: publish something unfinished, on purpose, with
+       a date on which the exception stops working. Two fields, because
+       editorial-check.js treats a flag without a date as no exception at all. */
+    @Published var overrideFlag: String = ""       // allow_placeholder_publish
+    @Published var overrideUntil: String = ""      // allow_placeholder_publish_until
     @Published var uploadingImage = false
     @Published var restoreOffer: String?     // autosaved draft found on open
     var restoreOfferDate: Date?
@@ -141,7 +146,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.fmDoc = doc
 
         var opaque = Set<String>()
-        for key in ["title", "date", "author", "description", "draft", "status", "hero_image", "canva_cover_design", "scheduled_publish_at"] where doc.isOpaque(key) {
+        for key in ["title", "date", "author", "description", "draft", "status", "hero_image", "canva_cover_design", "scheduled_publish_at", "allow_placeholder_publish", "allow_placeholder_publish_until"] where doc.isOpaque(key) {
             opaque.insert(key)
         }
         if doc.entries.first(where: { $0.key == "tags" }).map({ !$0.isBindableList }) == true {
@@ -161,6 +166,8 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.heroImagePath = doc.scalar("hero_image") ?? ""
         self.canvaCoverDesign = doc.scalar("canva_cover_design") ?? ""
         self.scheduledAt = doc.scalar("scheduled_publish_at") ?? ""
+        self.overrideFlag = doc.scalar("allow_placeholder_publish") ?? ""
+        self.overrideUntil = doc.scalar("allow_placeholder_publish_until") ?? ""
         // parse canva_designs raw block: "- id: X" / "  path: Y" pairs
         if let entry = doc.entries.first(where: { $0.key == "canva_designs" }) {
             var pending: String?
@@ -254,6 +261,17 @@ final class EditorDocument: ObservableObject, Identifiable {
             if isDraft, s != "scheduled" { doc.setScalar("status", "draft") }
             if !isDraft { doc.setScalar("status", "published") }
         }
+        /* Both or neither. A flag without a date is not an exception the site
+           honours, and a date without a flag is a leftover that says nothing. */
+        if !opaqueKeys.contains("allow_placeholder_publish") {
+            if overrideFlag.isEmpty || overrideUntil.isEmpty {
+                if doc.scalar("allow_placeholder_publish") != nil { doc.removeEntry("allow_placeholder_publish") }
+                if doc.scalar("allow_placeholder_publish_until") != nil { doc.removeEntry("allow_placeholder_publish_until") }
+            } else {
+                doc.setScalar("allow_placeholder_publish", overrideFlag)
+                doc.setScalar("allow_placeholder_publish_until", overrideUntil)
+            }
+        }
         if let lines = pendingCanvaLines { doc.setRawLines("canva_designs", lines) }
         doc.body = bodyText
         return doc.serialize()
@@ -272,11 +290,6 @@ final class EditorDocument: ObservableObject, Identifiable {
     /// The article's frontmatter type, which decides the build's word floor.
     var articleType: String {
         exposedDoc.scalar("type") ?? ""
-    }
-
-    /// The site's escape hatch, verbatim from the frontmatter.
-    var overrideFlag: String { exposedDoc.scalar("allow_placeholder_publish") ?? "" }
-    var overrideUntil: String { exposedDoc.scalar("allow_placeholder_publish_until") ?? ""
     }
 
     enum PublishState { case draft, scheduled(String), published }
@@ -308,6 +321,22 @@ final class EditorDocument: ObservableObject, Identifiable {
         recomputeDirty()
     }
     func backToDraft() { isDraft = true; scheduledAt = ""; recomputeDirty() }
+
+    /// Publish something the editorial gate would otherwise hold back, with a
+    /// date on which the exception expires. Deliberately not a toggle you can
+    /// leave on: the site treats a passed date as no exception at all, so an
+    /// article that is never finished grows its block back by itself.
+    func publishAnyway(until date: String) {
+        overrideFlag = "true"
+        overrideUntil = date
+        publishNow()
+    }
+
+    /// Take the exception away again, without touching the status.
+    func clearOverride() {
+        overrideFlag = ""; overrideUntil = ""
+        recomputeDirty()
+    }
 
     func save(repo: String, force: Bool = false, message customMessage: String? = nil) async {
         saving = true
@@ -970,6 +999,7 @@ struct EditorView: View {
     @AppStorage("editorZoom") private var editorZoom = 1.0
 
     @State private var showPublish = false
+    @State private var overrideDate = Date().addingTimeInterval(60 * 60 * 24 * 7)
     @State private var scheduleDate = Date().addingTimeInterval(86400)
     @State private var canvaSheet: CanvaSheetContext?
     @State private var canvaBusy = false
@@ -1856,9 +1886,51 @@ struct EditorView: View {
                     Text(blocker)
                         .font(.caption2).foregroundColor(.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Publishing it stops the whole deploy, so nothing else you changed goes live either. To see how it looks, open it under /preview/ — drafts are built there with the same template and cover image.")
+                    Text("It will not appear on the site. Everything else still deploys. To see how it looks, open it under /preview/ — drafts are built there with the same template and cover image.")
                         .font(.caption2).foregroundColor(.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    /* The deliberate exception. It is a separate control from
+                       "Publish now" on purpose: publishing something unfinished
+                       should be a decision you make, not a button you reach for
+                       by accident. The date is not optional — the site ignores a
+                       flag without one, and an exception that cannot expire is
+                       not an exception, it is a permanent hole. */
+                    Divider().padding(.vertical, 2)
+                    Text("Publish it anyway")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Goes live with the placeholder text still in it. The exception expires on the date below and the block comes back by itself.")
+                        .font(.caption2).foregroundColor(.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        DatePicker("", selection: $overrideDate,
+                                   in: Date()...Date().addingTimeInterval(60 * 60 * 24 * 90),
+                                   displayedComponents: .date)
+                            .labelsHidden()
+                        Button {
+                            let iso = isoString(overrideDate)
+                            doc.publishAnyway(until: iso)
+                            commitPublish(message: "content: publish \(doc.slug) with placeholder override until \(iso)")
+                        } label: {
+                            Label("Publish anyway", systemImage: "exclamationmark.triangle.fill")
+                        }
+                        .tint(.orange)
+                    }
+                }
+            } else if !doc.overrideUntil.isEmpty {
+                /* The exception is on and currently holding. Say so, say until
+                   when, and make taking it back one click. */
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Placeholder exception active until \(doc.overrideUntil)",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.orange)
+                    Text("The editorial gate is letting this through because of that date. After it passes, the article is held back again on the next build.")
+                        .font(.caption2).foregroundColor(.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Remove the exception") { doc.clearOverride() }
+                        .font(.caption2)
                 }
             } else {
                 Text("Warnings only — you decide.").font(.caption2).foregroundColor(.textSecondary)
