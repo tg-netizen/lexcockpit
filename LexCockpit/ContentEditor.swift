@@ -1839,7 +1839,25 @@ struct EditorView: View {
                       doc.bodyText.contains("class=\"draft-note\"")
                           ? "Schema notes present — removed automatically on publish"
                           : "No schema notes left")
-            Text("Warnings only — you decide.").font(.caption2).foregroundColor(.textSecondary)
+            /* The first three lines are advice: a missing tag is untidy, not
+               fatal. The last two are the build's own rules, so they are not
+               advice at all — the deploy stops on them. */
+            if let blocker = EditorialGate.blocker(body: doc.bodyText, type: doc.articleType) {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("The build will refuse this", systemImage: "xmark.octagon.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.red)
+                    Text(blocker)
+                        .font(.caption2).foregroundColor(.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Publishing it stops the whole deploy, so nothing else you changed goes live either. To see how it looks, open it under /preview/ — drafts are built there with the same template and cover image.")
+                        .font(.caption2).foregroundColor(.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("Warnings only — you decide.").font(.caption2).foregroundColor(.textSecondary)
+            }
 
             Divider()
 
@@ -1851,6 +1869,7 @@ struct EditorView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.accentNavy)
+            .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType) != nil)
 
             HStack(spacing: 8) {
                 DatePicker("", selection: $scheduleDate, in: Date()..., displayedComponents: .date)
@@ -1860,6 +1879,9 @@ struct EditorView: View {
                     doc.schedule(iso)
                     commitPublish(message: "content: schedule \(doc.slug) for \(iso)")
                 }
+                /* Scheduling is publishing with a delay: the daily build flips
+                   the status and then trips over the same gate. */
+                .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType) != nil)
             }
             Text("Scheduled = stays a draft until the site’s daily build flips it on the chosen date.")
                 .font(.caption2).foregroundColor(.textSecondary)
@@ -2704,6 +2726,21 @@ enum EditorialGate {
     nonisolated static func floor(for type: String) -> Int {
         let t = type.lowercased()
         return (t == "brief" || t == "news") ? wordFloor.brief : wordFloor.other
+    }
+
+    /// The reason the build would refuse this body, or nil when it would pass.
+    /// Only the two conditions that actually call process.exit(1) count here;
+    /// a missing tag or cover image is untidy, not fatal.
+    nonisolated static func blocker(body: String, type: String) -> String? {
+        if let phrase = placeholder(in: body) {
+            return "The body still contains “\(phrase)”. scripts/editorial-check.js "
+                 + "rejects placeholder text in a published article."
+        }
+        if let short = wordShortfall(body: body, type: type) {
+            return "The body has \(short.words) words. The build floor for this "
+                 + "type is \(short.floor)."
+        }
+        return nil
     }
 
     /// Word count and the floor it misses, or nil when the body is long enough.
