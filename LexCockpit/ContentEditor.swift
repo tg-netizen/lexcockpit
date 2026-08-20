@@ -269,6 +269,11 @@ final class EditorDocument: ObservableObject, Identifiable {
         exposedDoc.scalar("word_goal").flatMap { Int($0) }
     }
 
+    /// The article's frontmatter type, which decides the build's word floor.
+    var articleType: String {
+        exposedDoc.scalar("type") ?? ""
+    }
+
     enum PublishState { case draft, scheduled(String), published }
     var publishState: PublishState {
         if !isDraft { return .published }
@@ -1821,9 +1826,14 @@ struct EditorView: View {
                 checkLine(ok: !doc.heroImagePath.isEmpty, "Cover image set")
                 checkLine(ok: !doc.descriptionText.isEmpty, "Description present")
                 checkLine(ok: !doc.tagsCSV.trimmingCharacters(in: .whitespaces).isEmpty, "At least one tag")
-                checkLine(ok: !doc.bodyText.lowercased().contains("text will follow")
-                              && !doc.bodyText.lowercased().contains("todo"),
-                          "No placeholder text left")
+                checkLine(ok: EditorialGate.placeholder(in: doc.bodyText) == nil,
+                          EditorialGate.placeholder(in: doc.bodyText).map {
+                              "Placeholder text: “\($0)” — the build will refuse this"
+                          } ?? "No placeholder text left")
+                checkLine(ok: EditorialGate.wordShortfall(body: doc.bodyText, type: doc.articleType) == nil,
+                          EditorialGate.wordShortfall(body: doc.bodyText, type: doc.articleType).map {
+                              "\($0.words) words — the build floor is \($0.floor)"
+                          } ?? "Long enough to publish")
             }
             checkLine(ok: !doc.bodyText.contains("class=\"draft-note\""),
                       doc.bodyText.contains("class=\"draft-note\"")
@@ -2655,5 +2665,51 @@ struct PlainTextEditor: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
         }
+    }
+}
+
+
+// MARK: - The site's own publish gate, mirrored
+
+/// scripts/editorial-check.js runs as the second step of the Netlify build and
+/// calls process.exit(1) on two conditions. Because the build command is an
+/// `&&` chain, that aborts everything after it: no articles, no home page, no
+/// deploy at all. The site simply freezes at its last good version.
+///
+/// This app used to check for "text will follow" and "todo". The site checks a
+/// longer list. On 17 June 2026 `the-brexit-fail` was published with the body
+/// "Text will come soon" — which matches the site's `text will come` and
+/// neither of the app's two phrases. The app showed a green tick, the build
+/// died, and nothing on the site changed for anyone who was watching.
+///
+/// So the list lives here verbatim. If scripts/editorial-check.js changes,
+/// change this with it — a gate the author cannot see is worse than no gate.
+enum EditorialGate {
+
+    /// Mirrors PLACEHOLDER_RE in scripts/editorial-check.js.
+    static let placeholderPhrases = [
+        "todo", "text folgt", "wird ergänzt", "coming soon",
+        "text will come", "text will follow", "text kommt", "halo halo"
+    ]
+
+    /// Mirrors MIN_WORDS: briefs and news need 60, everything else 150.
+    static let wordFloor = (brief: 60, other: 150)
+
+    /// The offending phrase, or nil when the body is clean.
+    nonisolated static func placeholder(in body: String) -> String? {
+        let hay = body.lowercased()
+        return placeholderPhrases.first { hay.contains($0) }
+    }
+
+    nonisolated static func floor(for type: String) -> Int {
+        let t = type.lowercased()
+        return (t == "brief" || t == "news") ? wordFloor.brief : wordFloor.other
+    }
+
+    /// Word count and the floor it misses, or nil when the body is long enough.
+    nonisolated static func wordShortfall(body: String, type: String) -> (words: Int, floor: Int)? {
+        let n = body.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+        let f = floor(for: type)
+        return n < f ? (words: n, floor: f) : nil
     }
 }
