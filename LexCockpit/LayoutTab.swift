@@ -25,7 +25,13 @@ struct LayoutTabView: View {
     let site: SiteProject
     @State private var selected: String?
     @State private var openBlock: UUID?
-    @State private var previewing = false
+    /* Die Vorschau ist jetzt die Arbeitsflaeche, also faengt der
+       Bereich damit an. Die Blockliste bleibt daneben erreichbar, fuer
+       alles, was sich im Dokument nicht anfassen laesst: Quellenkaesten,
+       Tabellen, Werkzeugparameter. */
+    @State private var previewing = true
+    @State private var picked: String?
+    @Environment(\.colorScheme) private var scheme
 
     private var page: SitePage? {
         model.pages.first { $0.id == (selected ?? model.pages.first?.id) }
@@ -59,8 +65,7 @@ struct LayoutTabView: View {
                               systemImage: "clock")
                 } else if let p = page {
                     if previewing {
-                        PagePreview(model: model, page: p, site: site)
-                            .frame(minHeight: 520)
+                        live(p)
                     } else {
                         editor(p)
                     }
@@ -113,14 +118,14 @@ struct LayoutTabView: View {
             }
 
             Picker("", selection: $previewing) {
+                Text("Page").tag(true)
                 Text("Blocks").tag(false)
-                Text("Preview").tag(true)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 190)
-            .help("The preview renders the blocks with the site's own stylesheet, "
-                  + "using the same rules as the deploy")
+            .help("Page: work in the page itself. Blocks: the list, for everything "
+                  + "the page cannot be typed into directly.")
 
             if model.pages.count > 1 {
                 Picker("", selection: Binding(
@@ -762,5 +767,79 @@ private struct PagePreview: View {
         """
         let base = site.url.flatMap { URL(string: $0) }
         webView.loadHTMLString(html, baseURL: base)
+    }
+}
+
+
+// MARK: - Die Seite selbst als Arbeitsflaeche
+
+extension LayoutTabView {
+    @ViewBuilder func live(_ p: SitePage) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.design == nil {
+                HStack(spacing: 8) {
+                    if model.designLoading {
+                        ProgressView().controlSize(.small)
+                        Text("Fetching the stylesheet").font(.system(size: 11))
+                            .foregroundColor(.textSecondary)
+                    } else {
+                        Text("Without the stylesheet this shows the structure, not the design.")
+                            .font(.system(size: 11)).foregroundColor(.statusAmber)
+                        Button("Fetch it") { Task { await model.loadDesign() } }
+                            .buttonStyle(.plain).foregroundColor(.accentNavy)
+                            .font(.system(size: 11))
+                    }
+                    Spacer()
+                }
+            }
+            LivePreview(model: model, page: p, site: site,
+                        dark: scheme == .dark, selection: $picked)
+                .frame(minHeight: 560)
+                .overlay(RoundedRectangle(cornerRadius: 2)
+                    .stroke(Color.cardBorder, lineWidth: 1))
+
+            /* Was sich im Dokument nicht tippen laesst, bekommt hier
+               seinen Platz, sobald es angeklickt ist. Ein Werkzeug an Ort
+               und Stelle zu bearbeiten waere ein Versprechen, das der
+               Editor nicht halten kann; seine Parameter daneben zu zeigen,
+               ist eines, das er haelt. */
+            if let sel = picked, let b = blockAt(p, sel) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(b.label.uppercased())
+                            .font(.system(size: 9, weight: .semibold)).tracking(0.4)
+                            .foregroundColor(.accentNavy)
+                        Text(b.summary).font(.system(size: 11))
+                            .foregroundColor(.textSecondary).lineLimit(1)
+                        Spacer()
+                        Button("Open in the block list") {
+                            previewing = false
+                            openBlock = b.id
+                        }
+                        .buttonStyle(.plain).foregroundColor(.accentNavy)
+                        .font(.system(size: 11))
+                    }
+                    if !BlockRenderer.typeableInPlace.contains(b.type) {
+                        Text("This one is moved and removed in the page, but written in the "
+                             + "block list: the page cannot show a form for it without "
+                             + "becoming a picture of itself.")
+                            .font(.system(size: 10)).foregroundColor(.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.bgCard))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cardBorder, lineWidth: 1))
+            }
+        }
+    }
+
+    func blockAt(_ p: SitePage, _ path: String) -> PageBlock? {
+        let bits = path.split(separator: ".")
+        guard bits.count == 2, let si = Int(bits[0]), let bi = Int(bits[1]),
+              p.sections.indices.contains(si),
+              p.sections[si].blocks.indices.contains(bi) else { return nil }
+        return p.sections[si].blocks[bi]
     }
 }
