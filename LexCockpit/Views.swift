@@ -124,7 +124,7 @@ struct PipelineView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 if let dg = it.responsible_dg { Pill(text: dg) }
-                                if let q = it.planned_quarter { Pill(text: q, color: .brandGold) }
+                                if let q = it.planned_quarter { Pill(text: q, color: .goldText) }
                                 if let p = it.priority { Pill(text: p, color: .statusAmber) }
                                 Spacer()
                             }
@@ -218,7 +218,7 @@ struct EnforcementView: View {
                             }
                             HStack(spacing: 8) {
                                 if let r = c.regulation { Pill(text: r) }
-                                if let j = c.jurisdiction { Pill(text: j, color: .brandGold) }
+                                if let j = c.jurisdiction { Pill(text: j, color: .goldText) }
                                 if let a = c.authority { Text(a).font(.caption).foregroundColor(.textSecondary) }
                                 Spacer()
                                 Text(prettyDate(c.date)).font(.caption).foregroundColor(.textSecondary)

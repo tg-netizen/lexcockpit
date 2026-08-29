@@ -174,7 +174,7 @@ struct SnapshotHistorySheet: View {
                         Button("Restore this version") {
                             if !previewText.isEmpty { restore(previewText); dismiss() }
                         }
-                        .buttonStyle(.borderedProminent).tint(.accentNavy)
+                        .buttonStyle(.borderedProminent).tint(.accentNavySolid)
                         .disabled(previewText.isEmpty)
                     }
                     .padding(10)

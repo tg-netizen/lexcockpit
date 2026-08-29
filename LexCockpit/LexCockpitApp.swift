@@ -1,6 +1,15 @@
 import SwiftUI
 import AppKit
 
+
+// TEMP-DIAGNOSE
+func ldgTrace(_ m: String) {
+    let f = "/private/tmp/claude-501/-Users-theoglunz-Desktop-geopolitics-lex/197db9c4-8dc4-49e2-81af-14b963a4eb6c/scratchpad/trace.log"
+    let line = m + "\n"
+    if let h = FileHandle(forWritingAtPath: f) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() }
+    else { try? line.write(toFile: f, atomically: true, encoding: .utf8) }
+}
+
 @main
 struct LexCockpitApp: App {
     @NSApplicationDelegateAdaptor(CockpitAppDelegate.self) private var appDelegate
@@ -57,6 +66,7 @@ struct LexCockpitApp: App {
         }
         // One-time keychain ownership adoption (kills recurring ACL prompts).
         Keychain.adoptOwnership()
+        ldgTrace("App.init fertig")
         // Under `swift run` there is no app bundle — promote to a regular
         // foreground app so the window appears and takes focus.
         DispatchQueue.main.async {
@@ -68,12 +78,34 @@ struct LexCockpitApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onAppear {
+                    ldgTrace("ContentView.onAppear")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        ldgTrace("Fenster: " + NSApp.windows.map {
+                            "\($0.className) \(Int($0.frame.width))x\(Int($0.frame.height)) vis=\($0.isVisible)"
+                        }.joined(separator: " | "))
+                    }
+                }
                 .environmentObject(store)
                 .frame(minWidth: 1000, minHeight: 640)
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
-            CommandGroup(replacing: .newItem) {}   // no "New Window"
+            /* No "New Window": a second copy of the same workspace is
+               confusing, and the article windows are the multi window
+               story. But the slot cannot stay empty, because with the
+               MenuBarExtra keeping the app alive a closed window left no
+               way back at all. */
+            CommandGroup(replacing: .newItem) {
+                Button("Show Workspace") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    for w in NSApp.windows where w.canBecomeMain {
+                        if w.isMiniaturized { w.deminiaturize(nil) }
+                        w.makeKeyAndOrderFront(nil)
+                    }
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     Task { await UpdateChecker.shared.check(force: true) }
@@ -201,40 +233,24 @@ struct LocalMarkdownWindow: View {
     }
 }
 
-enum CockpitSection: String, CaseIterable, Identifiable, Hashable {
-    case dashboard, radar, analytics, tracker, defence, pipeline, trilogue, enforcement
-    var id: String { rawValue }
+/* ── One navigation, not two ──────────────────────────────────────────
+   Until now the app had a global list of desks (Radar, Tracker, Defence
+   and the rest) sitting beside a list of projects, and a separate row of
+   section chips inside each project. Two navigations that could disagree
+   about where the user was, which is most of what "it does not feel
+   thought through" actually means when you sit down and use it.
 
-    var title: String {
-        switch self {
-        case .dashboard:   return "Home"
-        case .radar:       return "Radar"
-        case .analytics:   return "Analytics"
-        case .tracker:     return "Tracker"
-        case .defence:     return "Defence"
-        case .pipeline:    return "Pipeline"
-        case .trilogue:    return "Trilogue"
-        case .enforcement: return "Enforcement"
-        }
-    }
+   There is one site, and every desk is a desk OF that site: the Radar
+   watches its feeds, the Tracker tracks the regulations it publishes on.
+   So the desks moved inside the project, and what is left at the top
+   level is Home and the projects themselves. Everything else is reached
+   by opening a project, which is also how the site itself is organised
+   and how the user described wanting to work. */
 
-    var icon: String {
-        switch self {
-        case .dashboard:   return "square.grid.2x2"
-        case .radar:       return "dot.radiowaves.left.and.right"
-        case .analytics:   return "chart.bar"
-        case .tracker:     return "calendar"
-        case .defence:     return "shield.lefthalf.filled"
-        case .pipeline:    return "tray.full"
-        case .trilogue:    return "person.3"
-        case .enforcement: return "eurosign.circle"
-        }
-    }
-}
-
-/// Sidebar selection: a fixed section, or one site workspace.
+/// Where the sidebar can be. Sections live inside a project now, so they
+/// are not cases here: `go(site:tab:)` resolves them to their project.
 enum SidebarSelection: Hashable {
-    case section(CockpitSection)
+    case home
     case site(String)
 }
 
@@ -242,7 +258,7 @@ struct ContentView: View {
     @EnvironmentObject var store: CockpitStore
     @ObservedObject private var updates = UpdateChecker.shared
     @StateObject private var chrome = ChromeModel()
-    @State private var selection: SidebarSelection? = .section(.dashboard)
+    @State private var selection: SidebarSelection? = .home
     @State private var showSettings = false
     @State private var showSwitcher = false
     @State private var showOnboarding = false
@@ -251,11 +267,21 @@ struct ContentView: View {
     @State private var columns = NavigationSplitViewVisibility.automatic
     @Environment(\.openWindow) private var openWindow
 
-    /// Flat ⌘1…⌘9 order: Dashboard, then projects, then topics.
+    /// Flat ⌘1…⌘9: Home, then the projects. Nothing else, because a
+    /// shortcut that lands somewhere the sidebar cannot show is how a user
+    /// ends up not trusting either.
     private var shortcutOrder: [SidebarSelection] {
-        [.section(.dashboard)]
-            + store.sites.map { .site($0.id) }
-            + [.section(.tracker), .section(.pipeline), .section(.trilogue), .section(.enforcement)]
+        [.home] + store.sites.map { .site($0.id) }
+    }
+
+    /// Open a project at one of its sections. This is the only way into a
+    /// section now, so every caller goes through it and the sidebar, the
+    /// hub and ⌘K can no longer disagree about where the user is.
+    private func go(_ site: SiteProject, _ tab: WorkspaceTab) {
+        WorkspaceModel.shared(for: site).tab = tab
+        selection = .site(site.id)
+        SessionHub.shared.state.selectionSite = site.id
+        SessionHub.shared.state.selectionSection = nil
     }
 
     var body: some View {
@@ -301,6 +327,7 @@ struct ContentView: View {
         .onAppear { NSApp.windows.first?.setFrameAutosaveName("LexCockpitMain") }
         .sheet(isPresented: $showSwitcher) {
             QuickSwitcherView(store: store, navigate: { sel in selection = sel },
+                              openSection: { site, tab in go(site, tab) },
                               openArticle: { site, path in
                                   openWindow(id: "article", value: ArticleRef(site: site, path: path))
                               },
@@ -414,8 +441,13 @@ struct ContentView: View {
             if let path = s.articlePath {
                 Task { await WorkspaceModel.shared(for: site).openPath(path) }
             }
-        } else if let raw = s.selectionSection, let sec = CockpitSection(rawValue: raw) {
-            selection = .section(sec)
+        } else if s.selectionSection != nil {
+            /* A section saved by an older build. Those live inside a
+               project now, so the name no longer resolves to anything at
+               this level. Home is the honest place to land, and the stale
+               value is cleared so it cannot puzzle us again. */
+            selection = .home
+            hub.state.selectionSection = nil
         }
     }
 
@@ -434,35 +466,62 @@ struct ContentView: View {
 
     // MARK: Sidebar (light, eyebrow sections, navy active state)
 
+    /* The sidebar is the whole navigation now.
+     *
+     * It used to list three global "Cockpit" sections, then the projects,
+     * then a flat list of "Topics" that belonged to no project at all.
+     * Clicking a topic took you off the site you were working on; clicking
+     * the site handed you a second row of chips. Two navigations, neither
+     * aware of the other, which is what made the app feel unplanned.
+     *
+     * One rule now: the site owns everything. Home lists the projects.
+     * Pick one and it opens into its own sections, grouped by what a
+     * working day actually does, and the sections that used to be global
+     * sit inside it, because they were always readings of that site's own
+     * files. */
+    /* ── The sidebar ──────────────────────────────────────────────────
+       This wants to be a List(selection:) so it inherits arrow keys, the
+       system selection and VoiceOver's "selected" trait. It was built
+       that way and reverted: on this macOS version a List with a derived
+       selection binding inside the split view's sidebar column hung the
+       window during restoration, every time, before it appeared. A
+       sidebar that answers the arrow keys is worth having; an app that
+       does not open is not, so the hand-drawn rows stay until that can be
+       done without the hang.
+
+       What did survive from that attempt is the part that mattered most:
+       there is now ONE row style, not two. The project row and the
+       section rows used to differ in seven measurable ways (bar size,
+       icon size, text size, inactive colour, active fill, corner, padding)
+       for no reason other than having been written at different times. */
     private var sidebar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
-                eyebrow("Cockpit")
-                sideRow(.section(.dashboard), title: CockpitSection.dashboard.title,
-                        icon: CockpitSection.dashboard.icon)
-                sideRow(.section(.radar), title: radarRowTitle, icon: CockpitSection.radar.icon)
-                sideRow(.section(.analytics), title: CockpitSection.analytics.title,
-                        icon: CockpitSection.analytics.icon)
+            VStack(alignment: .leading, spacing: 2) {
+                sideRow(.home, title: "Home", icon: "house")
 
                 eyebrow("Projects").padding(.top, 14)
                 if store.sites.isEmpty {
                     Text("No projects yet")
-                        .font(.caption).foregroundColor(.textSecondary)
+                        .font(.system(size: 12))
+                        .foregroundColor(.textSecondary)
                         .padding(.horizontal, 14).padding(.vertical, 2)
                 } else {
                     ForEach(store.sites) { site in
-                        sideRow(.site(site.id), title: site.name, icon: "globe")
+                        sideRow(.site(site.id), title: site.name,
+                                icon: "globe.europe.africa")
+                            .contextMenu { siteMenu(site) }
+                        if openSiteID == site.id {
+                            SiteSectionList(site: site,
+                                            model: WorkspaceModel.shared(for: site),
+                                            onPick: { tab in go(site, tab) })
+                        }
                     }
-                }
-
-                eyebrow("Topics").padding(.top, 14)
-                ForEach([CockpitSection.tracker, .defence, .pipeline, .trilogue, .enforcement]) { s in
-                    sideRow(.section(s), title: s.title, icon: s.icon)
                 }
 
                 Spacer(minLength: 20)
                 Text("v\(AppVersion.display)")
-                    .font(.caption2).foregroundColor(.textSecondary)
+                    .font(.system(size: 10))
+                    .foregroundColor(.textSecondary)
                     .padding(.horizontal, 14).padding(.bottom, 8)
             }
             .padding(.top, 36)          // clear of the traffic lights (hidden title bar)
@@ -470,76 +529,84 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color.bgCard)
-        .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
+        .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
         .navigationTitle("LexCockpit")
+    }
+
+    /// Right-click on a project. The same actions the Home card already
+    /// offered, in the place people actually right-click.
+    @ViewBuilder private func siteMenu(_ site: SiteProject) -> some View {
+        if let u = site.url, let url = URL(string: u) {
+            Button("Open website") { NSWorkspace.shared.open(url) }
+        }
+        if let r = site.repo, let url = URL(string: "https://github.com/" + r) {
+            Button("Open repository") { NSWorkspace.shared.open(url) }
+        }
+        Divider()
+        Button("Instruments") { go(site, .tools) }
+        Button("Articles") { go(site, .content) }
     }
 
     private func eyebrow(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: 10, weight: .semibold))
             .tracking(0.6)
             .foregroundColor(.textSecondary)
             .padding(.horizontal, 14)
             .padding(.bottom, 2)
     }
 
+    /* One row style for the whole sidebar. Home, a project and a section
+       are the same shape at two indents, so nothing in the list looks
+       like a different kind of thing than it is. */
     private func sideRow(_ target: SidebarSelection, title: String, icon: String) -> some View {
         let active = selection == target
         return Button {
-            selection = target
             switch target {
             case .site(let id):
-                SessionHub.shared.state.selectionSite = id
-                SessionHub.shared.state.selectionSection = nil
-            case .section(let sec):
-                SessionHub.shared.state.selectionSection = sec.rawValue
+                if let s = store.sites.first(where: { $0.id == id }) {
+                    go(s, WorkspaceModel.shared(for: s).tab)
+                }
+            case .home:
+                selection = .home
                 SessionHub.shared.state.selectionSite = nil
+                SessionHub.shared.state.selectionSection = nil
             }
         } label: {
-            HStack(spacing: 0) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(active ? Color.accentNavy : .clear)
-                    .frame(width: 4, height: 20)
-                HStack(spacing: 8) {
-                    Image(systemName: icon)
-                        .font(.system(size: 13))
-                        .foregroundColor(active ? .accentNavy : .textSecondary)
-                        .frame(width: 18)
-                    Text(title)
-                        .font(.system(size: 13, weight: active ? .semibold : .regular))
-                        .foregroundColor(active ? .accentNavy : .textPrimary)
-                    Spacer(minLength: 0)
-                }
-                .padding(.leading, 8)
-            }
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(active ? Color.navyTint : .clear)
-                    .padding(.horizontal, 6)
-            )
-            .contentShape(Rectangle())
+            SidebarRowLabel(title: title, icon: icon, active: active, indent: 0)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 4)
+    }
+
+    private var openSiteID: String? {
+        if case .site(let id) = selection ?? .home { return id }
+        return nil
+    }
+
+    /* The list has to OBSERVE the open project's model, or the marked row
+       and the panel drift apart the moment anything else changes the
+       section (Overview opens an article, Content jumps to Deploys). An
+       @ObservedObject cannot be optional, so when nothing is open we hand
+       it the first project's model and it simply renders no sections. */
+    private var sidebarModelSite: SiteProject {
+        if let id = openSiteID, let s = store.sites.first(where: { $0.id == id }) { return s }
+        return store.sites.first ?? SiteProject(id: "none", name: "None", url: nil,
+                                                cms_url: nil, repo: nil, default_branch: nil,
+                                                netlify_site_id: nil, content_paths: nil)
     }
 
     @ViewBuilder private var detailView: some View {
-        switch selection ?? .section(.dashboard) {
-        case .section(.dashboard):   ProjectHubView(navigate: { target in
-            selection = target
-            if case .site(let id) = target {
-                SessionHub.shared.state.selectionSite = id
-                SessionHub.shared.state.selectionSection = nil
-            }
-        })
-        case .section(.radar):       RadarView()
-        case .section(.analytics):   AnalyticsView()
-        case .section(.tracker):     TrackerView()
-        case .section(.defence):     DefenceEditorView()
-        case .section(.pipeline):    PipelineView()
-        case .section(.trilogue):    TrilogueView()
-        case .section(.enforcement): EnforcementView()
+        switch selection ?? .home {
+        case .home:
+            ProjectHubView(
+                navigate: { target in
+                    selection = target
+                    if case .site(let id) = target {
+                        SessionHub.shared.state.selectionSite = id
+                        SessionHub.shared.state.selectionSection = nil
+                    }
+                },
+                openSection: { site, tab in go(site, tab) })
         case .site(let id):
             if let site = store.sites.first(where: { $0.id == id }) {
                 WorkspaceView(site: site).id(site.id)
@@ -555,6 +622,7 @@ struct ContentView: View {
 struct QuickSwitcherView: View {
     @ObservedObject var store: CockpitStore
     var navigate: (SidebarSelection) -> Void
+    var openSection: (SiteProject, WorkspaceTab) -> Void
     var openArticle: (SiteProject, String) -> Void
     var actions: [(String, String, () -> Void)] = []
     @Environment(\.dismiss) private var dismiss
@@ -579,13 +647,22 @@ struct QuickSwitcherView: View {
             out.append(Item(id: "act-" + title, title: title, subtitle: "Action",
                             icon: icon, action: run))
         }
-        for sec in CockpitSection.allCases {
-            out.append(Item(id: "sec-" + sec.rawValue, title: sec.title, subtitle: "Section",
-                            icon: sec.icon, action: { navigate(.section(sec)) }))
-        }
+        out.append(Item(id: "sec-home", title: "Home", subtitle: "Section",
+                        icon: "square.grid.2x2", action: { navigate(.home) }))
         for site in store.sites {
             out.append(Item(id: "site-" + site.id, title: site.name, subtitle: "Project",
                             icon: "globe", action: { navigate(.site(site.id)) }))
+            /* Every section, carrying its project name. "Radar" on its own
+               was an address without a place, and with more than one site
+               it would have been ambiguous as well as vague. */
+            for tab in WorkspaceTab.allCases {
+                out.append(Item(id: "sec-\(site.id)-" + tab.rawValue,
+                                title: tab.title,
+                                subtitle: site.name,
+                                icon: tab.icon,
+                                searchExtra: site.name + " " + tab.title,
+                                action: { openSection(site, tab) }))
+            }
             for entry in WorkspaceModel.shared(for: site).contentEntries {
                 out.append(Item(id: entry.path, title: entry.title,
                                 subtitle: DateBucket.label(for: entry.scheduled.isEmpty
@@ -653,3 +730,91 @@ struct QuickSwitcherView: View {
         dismiss()
     }
 }
+
+
+// MARK: - The sections of one project, in the sidebar
+
+/// Observes the project's workspace model so the marked row and the panel
+/// on the right can never disagree.
+
+// MARK: - Sidebar rows
+
+/// The one row shape the sidebar uses, at two indents. Home, a project
+/// and a section are the same thing to a reader: a place to go.
+struct SidebarRowLabel: View {
+    let title: String
+    let icon: String
+    let active: Bool
+    /// 0 for a project or Home, 1 for a section inside a project.
+    let indent: Int
+    var trailingDot: Bool = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(active ? Color.accentNavy : Color.clear)
+                .frame(width: 3, height: 16)
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .frame(width: 16)
+            Text(title)
+                .font(.system(size: 13, weight: active ? .semibold : .regular))
+            if trailingDot {
+                Circle().fill(Color.brandGold).frame(width: 5, height: 5)
+                    .accessibilityLabel("Unsaved changes")
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(active ? .accentNavy : .textPrimary)
+        .padding(.leading, indent == 0 ? 11 : 24)
+        .padding(.trailing, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 2)
+                .fill(active ? Color.navyTint : Color.clear)
+                .padding(.leading, indent == 0 ? 8 : 21)
+                .padding(.trailing, 8)
+        )
+        .contentShape(Rectangle())
+    }
+}
+
+/// The sections of one project. Observes the project's model, so the
+/// marked row and the panel on the right can never disagree.
+private struct SiteSectionList: View {
+    let site: SiteProject
+    @ObservedObject var model: WorkspaceModel
+    var onPick: (WorkspaceTab) -> Void
+
+    var body: some View {
+        ForEach(WorkspaceTab.Group.allCases) { group in
+            VStack(alignment: .leading, spacing: 0) {
+                Text(group.title.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundColor(.textSecondary)
+                /* Only Regulation carries a note, and it is the truth:
+                   those four panels read EU wide feeds, not this
+                   project's files. Saying so in the heading costs one
+                   line and saves a reader finding out by confusion. */
+                if let note = group.note {
+                    Text(note)
+                        .font(.system(size: 9))
+                        .foregroundColor(.textSecondary)
+                }
+            }
+            .padding(.leading, 27).padding(.top, 10).padding(.bottom, 2)
+
+            ForEach(group.members) { tab in
+                Button { onPick(tab) } label: {
+                    SidebarRowLabel(title: tab.title, icon: tab.icon,
+                                    active: model.tab == tab, indent: 1,
+                                    trailingDot: tab == .content && model.editorDirty)
+                }
+                .buttonStyle(.plain)
+                .help(tab.title)
+            }
+        }
+    }
+}
+

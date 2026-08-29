@@ -67,7 +67,11 @@ enum BookmarkStore {
 
 struct SessionState: Codable, Equatable {
     var selectionSite: String?        // site id, or nil
-    var selectionSection: String?     // CockpitSection rawValue
+    /// Legacy: the rawValue of a top-level section, from the builds where
+    /// the desks sat beside the projects instead of inside them. Kept so an
+    /// old saved session still decodes; it is cleared on the first launch
+    /// that reads it, and nothing writes it any more.
+    var selectionSection: String?
     var workspaceTab: String?         // WorkspaceTab rawValue
     var articlePath: String?          // open article repo path
     var editorMode: Int?              // EditorMode rawValue
@@ -140,6 +144,28 @@ final class CockpitAppDelegate: NSObject, NSApplicationDelegate {
         for url in urls where url.pathExtension.lowercased() == "md" {
             NotificationCenter.default.post(name: Self.openMDNotification, object: url)
         }
+    }
+
+    /* ── Getting the window back ──────────────────────────────────────
+       This app keeps a MenuBarExtra, so closing the last window does not
+       quit it: it keeps running with nothing on screen. And the New Item
+       command is deliberately removed, so there is no Cmd-N either. Put
+       those two together and a closed window is unrecoverable except by
+       killing the process, which is exactly the state this app got into.
+
+       Returning true asks AppKit to restore the app's windows on the next
+       activation, which is what clicking the Dock icon or opening the app
+       again is supposed to do. Belt and braces: if AppKit finds nothing to
+       restore, un-minimise and raise whatever window still exists. */
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            for w in sender.windows where w.canBecomeMain {
+                if w.isMiniaturized { w.deminiaturize(nil) }
+                w.makeKeyAndOrderFront(nil)
+            }
+        }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {

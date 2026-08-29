@@ -4,27 +4,138 @@ import UniformTypeIdentifiers
 
 // MARK: - Tabs
 
+/* The sections a site offers.
+ *
+ * These used to be chips in a bar above the workspace, while the sidebar
+ * carried a separate, global list of "Topics". That was two navigations
+ * that did not know about each other: a topic took you off the site, and
+ * a site handed you a second bar. There is one navigation now, the
+ * sidebar, and the site owns it. The chips are gone.
+ *
+ * `group` is what the sidebar uses to headline them, so the order below
+ * is the order a working day tends to take: look, write, watch, ship. */
+/* ── The sections of a project ─────────────────────────────────────────
+   The grouping is not an invented taxonomy. lexdigestglobal.com has four
+   desks in its own nav.json, in this order: News, Regulation, Sanctions,
+   Defence. Those four are the middle of this list, spelled the same way
+   and ordered the same way, so that opening the app and opening the site
+   put you in front of the same furniture.
+
+   The groups around them are the parts of the work the website does not
+   have a desk for: the project itself and its instruments at the top,
+   publishing at the bottom. They are named for what they do, not for a
+   workflow metaphor. The previous names (Make, Watch, Desks, Ship) came
+   from a general idea of work rather than from this site, which is why
+   nothing in them could be found by someone who knows the site. */
 enum WorkspaceTab: String, CaseIterable, Identifiable {
-    case overview, content, planner, cms, deploys, repo
+    case overview, tools, radar, analytics
+    case content, planner
+    case tracker, pipeline, trilogue, enforcement
+    case sanctions
+    case defence
+    case cms, deploys, repo
+
     var id: String { rawValue }
+
     var title: String {
         switch self {
-        case .overview: return "Overview"
-        case .content:  return "Content"
-        case .planner:  return "Calendar"
-        case .cms:      return "CMS"
-        case .deploys:  return "Deploys"
-        case .repo:     return "Repo"
+        case .overview:    return "Overview"
+        case .tools:       return "Instruments"
+        case .radar:       return "Radar"
+        case .analytics:   return "Analytics"
+        case .content:     return "Articles"
+        case .planner:     return "Calendar"
+        case .tracker:     return "Deadlines"
+        case .pipeline:    return "Pipeline"
+        case .trilogue:    return "Trilogue"
+        case .enforcement: return "Enforcement"
+        case .sanctions:   return "Dossiers"
+        case .defence:     return "Defence"
+        case .cms:         return "CMS"
+        case .deploys:     return "Deploys"
+        case .repo:        return "Repo"
         }
     }
+
+    /* No symbol appears twice. Three used to: Home and Overview both drew
+       square.grid.2x2, the project row and CMS both drew globe, and the two
+       calendars differed only by a badge. A symbol that means two things is
+       worse than no symbol, because it is read faster than the label. */
     var icon: String {
         switch self {
-        case .overview: return "square.grid.2x2"
-        case .content:  return "doc.text"
-        case .planner:  return "calendar"
-        case .cms:      return "globe"
-        case .deploys:  return "arrow.up.circle"
-        case .repo:     return "chevron.left.forwardslash.chevron.right"
+        case .overview:    return "rectangle.3.group"
+        case .tools:       return "wrench.and.screwdriver"
+        case .radar:       return "dot.radiowaves.left.and.right"
+        case .analytics:   return "chart.bar"
+        case .content:     return "doc.text"
+        case .planner:     return "calendar.day.timeline.left"
+        case .tracker:     return "calendar.badge.clock"
+        case .pipeline:    return "tray.full"
+        case .trilogue:    return "person.3"
+        case .enforcement: return "eurosign.circle"
+        case .sanctions:   return "hand.raised"
+        case .defence:     return "shield.lefthalf.filled"
+        case .cms:         return "square.and.pencil.circle"
+        case .deploys:     return "arrow.up.circle"
+        case .repo:        return "chevron.left.forwardslash.chevron.right"
+        }
+    }
+
+    /// True where the section reads site-wide EU data rather than this
+    /// project's own. Sitting under a project it would otherwise promise
+    /// something it does not deliver, so the group heading says so.
+    var isSiteWide: Bool {
+        switch self {
+        case .tracker, .pipeline, .trilogue, .enforcement: return true
+        default: return false
+        }
+    }
+
+    enum Group: String, CaseIterable, Identifiable {
+        /// The project and the instruments that describe it.
+        case project
+        /// The four desks of lexdigestglobal.com, in the site's own order.
+        case news, regulation, sanctions, defence
+        /// Getting it out.
+        case publish
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .project:    return "Project"
+            case .news:       return "News"
+            case .regulation: return "Regulation"
+            case .sanctions:  return "Sanctions"
+            case .defence:    return "Defence"
+            case .publish:    return "Publish"
+            }
+        }
+
+        /// Shown under the heading where the group needs a caveat. Only
+        /// Regulation has one, and it is the truth: those four panels read
+        /// EU-wide feeds, not this project's files.
+        var note: String? {
+            self == .regulation ? "EU wide, not per project" : nil
+        }
+
+        /// True for the four groups that mirror a desk on the website.
+        var isSiteDesk: Bool {
+            switch self {
+            case .news, .regulation, .sanctions, .defence: return true
+            case .project, .publish: return false
+            }
+        }
+
+        var members: [WorkspaceTab] {
+            switch self {
+            case .project:    return [.overview, .tools, .radar, .analytics]
+            case .news:       return [.content, .planner]
+            case .regulation: return [.tracker, .pipeline, .trilogue, .enforcement]
+            case .sanctions:  return [.sanctions]
+            case .defence:    return [.defence]
+            case .publish:    return [.cms, .deploys, .repo]
+            }
         }
     }
 }
@@ -35,9 +146,20 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 final class WorkspaceModel: ObservableObject {
     let site: SiteProject
 
-    /// Canva-style editor takeover: when true the Content tab shows ONLY the
-    /// document editor (no library column, no workspace tab bar).
+    /// Canva-style editor takeover: when true the Content section shows
+    /// ONLY the document editor, without the library column.
     @Published var editorFull = false
+
+    /* The active section. It lives on the model rather than in the view
+       because the sidebar sets it now, and a @State in the view could not
+       hear that. Persisted, so the app reopens where it was left. */
+    @Published var tab: WorkspaceTab = .overview {
+        didSet {
+            guard tab != oldValue else { return }
+            SessionHub.shared.state.workspaceTab = tab.rawValue
+            SessionHub.shared.flush()
+        }
+    }
 
     // Deploys
     /* One state instead of three fields. The old triple could not say
@@ -57,6 +179,29 @@ final class WorkspaceModel: ObservableObject {
     var repoError: String? { repoState.error }
     var repoLoading: Bool { repoState.isLoading }
     @Published var dataFiles: [GHContentItem] = []
+
+    /* ── Tools ────────────────────────────────────────────────────────
+       The register of instruments the site carries. Derived from the repo
+       on demand rather than stored, because a hand-kept list of tools is a
+       list that goes stale the first busy week, and a stale list is worse
+       than none: it reads as coverage. */
+    @Published var toolsState: LoadState<[SiteTool]> = .never
+    var tools: [SiteTool] { toolsState.value ?? [] }
+    var toolsError: String? { toolsState.error }
+    var toolsLoading: Bool { toolsState.isLoading }
+    /// How much of the repo the last scan actually read, so the header can
+    /// say what its numbers rest on instead of implying completeness.
+    @Published var toolsScanned = ToolScanScope(scripts: 0, pages: 0)
+
+    /* ── Sanctions dossiers ───────────────────────────────────────────
+       The website carries a Sanctions desk with a country dossier per
+       regime. The app had no counterpart at all, so the desk was simply
+       missing from the workspace. This is the honest first step: not an
+       editor, but the actual stock, counted from the repo and openable. */
+    @Published var dossiersState: LoadState<[SiteDossier]> = .never
+    var dossiers: [SiteDossier] { dossiersState.value ?? [] }
+    var dossiersError: String? { dossiersState.error }
+    var dossiersLoading: Bool { dossiersState.isLoading }
 
     // Content (browser + editor) — lives here so edits survive tab switches
     @Published var contentState: LoadState<[ContentEntry]> = .never
@@ -180,6 +325,182 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    // MARK: Tools
+
+    /* ── How the tool register is derived ─────────────────────────────
+       There is no tools.json on the site, and there should not be: a
+       register somebody has to remember to update is a register that
+       quietly stops being true. So this reads the two facts that are
+       already in the repo and cannot drift from it.
+
+       Pass one, the scripts. Every instrument is booted by a script in
+       assets/js that queries its container by attribute. A MOUNT POINT is
+       queried without a root:  $$('[data-fundflow]')
+       An inner part is queried with one:  $('[data-ff-svg]', root)
+       That single comma is the whole distinction, and it holds: run
+       against the live repo it separates 30 mount points from 169 inner
+       parts with no overlap at all.
+
+       Pass two, the pages. A page that carries the attribute mounts the
+       instrument; a page that also loads the script drives it. Where the
+       two disagree the reader clicks something dead, which is exactly the
+       kind of rot nobody notices, so it is reported rather than hidden. */
+
+    func loadTools(force: Bool = false) async {
+        if !force, case .loaded = toolsState { return }
+        guard let repo = site.repo, !repo.isEmpty else {
+            toolsState = .failed(
+                "This project has no repo configured, so there is nothing to read the instruments out of.",
+                at: Date())
+            return
+        }
+        toolsState.beginLoading()
+        do {
+            let tree = try await GitHubAPI.tree(repo: repo)
+            let scriptPaths = tree.filter {
+                $0.type == "blob" && $0.path.hasPrefix("assets/js/") && $0.path.hasSuffix(".js")
+            }.map(\.path)
+            /* The German mirror under de/ repeats every page, and preview/
+               holds unpublished drafts. Counting either would double or
+               inflate the register without adding an instrument. */
+            let pagePaths = tree.filter {
+                $0.type == "blob" && $0.path.hasSuffix(".html")
+                    && !$0.path.hasPrefix("de/")
+                    && !$0.path.hasPrefix("preview/")
+                    && !$0.path.hasPrefix("scripts/")
+            }.map(\.path)
+
+            let scripts = try await Self.fetchAll(repo: repo, paths: scriptPaths)
+            var mountToScript: [String: String] = [:]
+            for (path, text) in scripts {
+                for attr in Self.mountPoints(in: text) { mountToScript[attr] = path }
+            }
+            guard !mountToScript.isEmpty else {
+                toolsState = .failed(
+                    "Read \(scripts.count) scripts and found no mount point in any of them. "
+                        + "Either this project mounts its instruments some other way, or the read failed.",
+                    at: Date())
+                return
+            }
+
+            let pages = try await Self.fetchAll(repo: repo, paths: pagePaths)
+            var mountedOn: [String: [String]] = [:]
+            var unwiredOn: [String: [String]] = [:]
+            for (path, html) in pages {
+                let loaded = Self.scriptSources(in: html)
+                for (attr, js) in mountToScript where Self.mounts(attr, in: html) {
+                    mountedOn[attr, default: []].append(path)
+                    if !loaded.contains(js) { unwiredOn[attr, default: []].append(path) }
+                }
+            }
+
+            let list: [SiteTool] = mountToScript.keys.map { attr in
+                let pages = (mountedOn[attr] ?? []).sorted()
+                let unwired = (unwiredOn[attr] ?? []).sorted()
+                return SiteTool(attribute: attr,
+                                name: SiteTool.readableName(for: attr),
+                                script: mountToScript[attr],
+                                pages: pages,
+                                unwiredPages: unwired)
+            }
+            /* Findings first: an instrument that is dead or orphaned is
+               the reason to open this list at all, so it does not sit at
+               the bottom where a long register buries it. */
+            .sorted { a, b in
+                if a.rank != b.rank { return a.rank < b.rank }
+                if a.pages.count != b.pages.count { return a.pages.count > b.pages.count }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+
+            toolsScanned = ToolScanScope(scripts: scripts.count, pages: pages.count)
+            toolsState = .loaded(list, at: Date())
+        } catch {
+            toolsState = .failed(error.localizedDescription, at: Date())
+        }
+    }
+
+    /* ── Reading many files without hammering the API ─────────────────
+       A site of this size is roughly 150 files per scan. Sequentially
+       that is a visibly slow panel; unbounded it is a burst GitHub is
+       entitled to throttle. Eight at a time is the compromise, and the
+       result is cached until the user asks for a fresh read.
+
+       A file that fails is skipped rather than failing the whole scan:
+       one unreadable page should cost that page, not the register. */
+    private static func fetchAll(repo: String, paths: [String]) async throws -> [(String, String)] {
+        var out: [(String, String)] = []
+        var remaining = paths[...]
+        try await withThrowingTaskGroup(of: (String, String)?.self) { group in
+            func addNext() {
+                guard let path = remaining.popFirst() else { return }
+                group.addTask {
+                    guard let text = try? await GitHubAPI.file(repo: repo, path: path).decodedText()
+                    else { return nil }
+                    return (path, text)
+                }
+            }
+            for _ in 0..<min(8, paths.count) { addNext() }
+            while let finished = try await group.next() {
+                if let finished { out.append(finished) }
+                addNext()
+            }
+        }
+        return out
+    }
+
+    // MARK: Sanctions dossiers
+
+    /// One request: the repo tree already lists every file, so the stock
+    /// of dossiers is a filter over it rather than a second scan.
+    func loadDossiers(force: Bool = false) async {
+        if !force, case .loaded = dossiersState { return }
+        guard let repo = site.repo, !repo.isEmpty else {
+            dossiersState = .failed(
+                "This project has no repo configured, so the dossiers cannot be counted.",
+                at: Date())
+            return
+        }
+        dossiersState.beginLoading()
+        do {
+            let tree = try await GitHubAPI.tree(repo: repo)
+            let rows = tree.filter {
+                $0.type == "blob"
+                    && $0.path.hasPrefix("politics/sanctions/")
+                    && $0.path.hasSuffix(".html")
+                    && !$0.path.hasSuffix("/index.html")
+            }.map { item -> SiteDossier in
+                let file = item.path.split(separator: "/").last.map(String.init) ?? item.path
+                return SiteDossier(path: item.path,
+                                   slug: file.replacingOccurrences(of: ".html", with: ""))
+            }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            dossiersState = .loaded(rows, at: Date())
+        } catch {
+            dossiersState = .failed(error.localizedDescription, at: Date())
+        }
+    }
+
+    /// Mount points in one script: `[data-x]` queried WITHOUT a root.
+    static func mountPoints(in js: String) -> Set<String> {
+        let pattern = #"(?:\$\$?|document\.querySelectorAll|document\.querySelector)\(\s*['"]\[(data-[a-z0-9-]+)\]['"]\s*\)"#
+        return Set(js.matches(pattern, group: 1))
+    }
+
+    /// The scripts a page loads, normalised so `/assets/js/x.js?v=abc`
+    /// and `assets/js/x.js` compare equal. The cache-busting stamp is the
+    /// reason a naive comparison would report every page as unwired.
+    static func scriptSources(in html: String) -> Set<String> {
+        let pattern = #"<script[^>]+src="([^"]+)""#
+        return Set(html.matches(pattern, group: 1).map { src in
+            String(src.split(separator: "?")[0]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        })
+    }
+
+    /// Whether a page mounts this attribute. The trailing boundary keeps
+    /// `data-filter-root` from matching inside `data-filter-root-extra`.
+    static func mounts(_ attr: String, in html: String) -> Bool {
+        html.range(of: "\(attr)(?=[\\s=>\"'/]|$)", options: .regularExpression) != nil
+    }
+
     /// Load the free ingest waiting list from Supabase `review_queue`.
     func loadReviewQueue() async {
         guard SupabaseAPI.isConfigured() else {
@@ -225,14 +546,23 @@ final class WorkspaceModel: ObservableObject {
 struct WorkspaceView: View {
     let site: SiteProject
     @StateObject private var model: WorkspaceModel
-    @State private var tab: WorkspaceTab = .overview
 
+    /// The section lives on the model now, so the sidebar and the view
+    /// cannot disagree about which one is open.
+    private var tab: WorkspaceTab { model.tab }
+
+    /* The saved section is restored on the MODEL, once, the first time it
+       is asked for. It used to be restored here, in the view's init, and
+       that was survivable only as long as nothing else observed the
+       model: an init runs during a view update, so writing a @Published
+       property there invalidates every observer mid-update. The moment
+       the sidebar started observing the same model to mark the current
+       row, that write became a loop, and the window hung during
+       restoration before it ever appeared. State belongs to the model,
+       and a view's init is not a place to change state. */
     init(site: SiteProject) {
         self.site = site
         _model = StateObject(wrappedValue: WorkspaceModel.shared(for: site))
-        if let raw = SessionHub.shared.state.workspaceTab, let t = WorkspaceTab(rawValue: raw) {
-            _tab = State(initialValue: t)
-        }
     }
 
     @EnvironmentObject var chrome: ChromeModel
@@ -251,12 +581,18 @@ struct WorkspaceView: View {
         .navigationTitle(site.name)
     }
 
-    // Slim bar: the window title already carries the project name (V6) —
-    // here only the tabs and the live status live.
+    /* The chips are gone. Fourteen sections would not fit in a row, and
+       even six of them wrapped on a narrow window: the screenshot that
+       started this rebuild showed "Overvie w" and "Calenda r" broken
+       across two lines. The sidebar carries them now, where a list can
+       be as long as it needs to be, and this bar states where you are. */
     private var topBar: some View {
-        HStack(spacing: 6) {
-            ForEach(WorkspaceTab.allCases) { t in
-                tabChip(t)
+        HStack(spacing: 10) {
+            Image(systemName: tab.icon).font(.system(size: 12))
+                .foregroundColor(.textSecondary)
+            Text(tab.title).font(.system(size: 13, weight: .semibold))
+            if tab == .content && model.editorDirty {
+                Circle().fill(Color.brandGold).frame(width: 6, height: 6)
             }
             Spacer()
             if let urlStr = site.url, let url = URL(string: urlStr) {
@@ -280,43 +616,30 @@ struct WorkspaceView: View {
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(Capsule().fill(Color.primary.opacity(0.05)))
         } else {
-            Pill(text: "Workspace", color: .brandGold.opacity(0.9))
+            Pill(text: "No Netlify id", color: .statusAmber)
         }
-    }
-
-    private func tabChip(_ t: WorkspaceTab) -> some View {
-        Button {
-            tab = t
-            SessionHub.shared.state.workspaceTab = t.rawValue
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: t.icon).font(.system(size: 11))
-                Text(t.title).font(.system(size: 12, weight: .semibold))
-                if t == .content && model.editorDirty {
-                    Circle().fill(Color.brandGold).frame(width: 6, height: 6)
-                }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(
-                Capsule().fill(tab == t ? Color.brandNavy : Color.primary.opacity(0.05))
-            )
-            .foregroundColor(tab == t ? .white : .primary)
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder private var content: some View {
         switch tab {
         case .overview: OverviewTabView(model: model, site: site, onOpen: { entry in
-            tab = .content
-            SessionHub.shared.state.workspaceTab = WorkspaceTab.content.rawValue
+            model.tab = .content
             Task { await model.openEntry(entry) }
         })
-        case .content:  ContentTabView(model: model, openDeploys: { tab = .deploys })
+        case .content:  ContentTabView(model: model, openDeploys: { model.tab = .deploys })
+        case .tools:    ToolsTabView(model: model, site: site)
         case .planner:  CalendarTabView(model: model, openArticle: { entry in
-                            tab = .content
+                            model.tab = .content
                             Task { await model.openEntry(entry) }
                         })
+        case .radar:       RadarView()
+        case .analytics:   AnalyticsView()
+        case .tracker:     TrackerView()
+        case .defence:     DefenceEditorView()
+        case .pipeline:    PipelineView()
+        case .trilogue:    TrilogueView()
+        case .enforcement: EnforcementView()
+        case .sanctions:   SanctionsTabView(model: model, site: site)
         case .cms:      CMSTabView(site: site)
         case .deploys:  DeploysTabView(model: model)
         case .repo:     RepoTabView(model: model)
@@ -448,7 +771,7 @@ struct OverviewTabView: View {
                                         HStack {
                                             entryPill(entry)
                                             if !entry.type.isEmpty {
-                                                Pill(text: entry.type.uppercased(), color: .brandGold.opacity(0.9))
+                                                Pill(text: entry.type.uppercased(), color: .textSecondary)
                                             }
                                             Spacer()
                                             Text(prettyDate(entry.scheduled.isEmpty ? entry.date : entry.scheduled))
@@ -664,7 +987,7 @@ struct ReviewQueueRow: View {
                                 .font(.caption)
                         }
                         .buttonStyle(.plain)
-                        .foregroundColor(.brandGold)
+                        .foregroundColor(.accentNavy)
                         .help("Opens a brief seeded with this item's title, link and "
                               + "retrieval date — one outlet, so it will say so.")
                     }
@@ -876,7 +1199,7 @@ struct ArticleDetailRail: View {
                     Label("Open in editor", systemImage: "square.and.pencil")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent).tint(.accentNavy)
+                .buttonStyle(.borderedProminent).tint(.accentNavySolid)
                 .controlSize(.large)
 
                 HStack(spacing: 12) {

@@ -344,5 +344,77 @@ func runStateSelfTests() -> Bool {
     expect(!UpdateChecker.isNewer("0.25", than: "0.25.0"),
            "update: a short version is not newer than its padded self")
 
+    // ── The tool register: the rule that separates a mount from a part ──
+    // This is the whole derivation. If the comma stops mattering, the app
+    // starts reporting 199 instruments instead of 30, and every one of the
+    // extra 169 is an inner part of another tool.
+    let js = """
+      (function () {
+        function $(s, r) { return (r || document).querySelector(s); }
+        function $$(s, r) { return [].slice.call((r || document).querySelectorAll(s)); }
+        function initFlow(root) {
+          var svg = $('[data-ff-svg]', root);
+          var btns = $$('[data-ff-route]', root);
+        }
+        function boot() { $$('[data-fundflow]').forEach(initFlow); }
+      })();
+      """
+    let mounts = WorkspaceModel.mountPoints(in: js)
+    expect(mounts == ["data-fundflow"],
+           "tools: a mount point is queried without a root")
+    expect(!mounts.contains("data-ff-svg"),
+           "tools: an inner part queried WITH a root is not an instrument")
+    expect(!mounts.contains("data-ff-route"),
+           "tools: the same holds for $$ with a root")
+
+    expect(WorkspaceModel.mountPoints(in: "document.querySelectorAll('[data-lagebild]')")
+             == ["data-lagebild"],
+           "tools: the plain querySelectorAll form counts too")
+    expect(WorkspaceModel.mountPoints(in: "$$(\"[data-sbx]\")") == ["data-sbx"],
+           "tools: double quotes are the same selector as single quotes")
+    expect(WorkspaceModel.mountPoints(in: "$$('[data-x]', root)").isEmpty,
+           "tools: a root argument disqualifies it, whitespace or not")
+
+    // ── The cache stamp, which a naive comparison trips over ────────────
+    let html = """
+      <script src="/assets/js/main.js?v=5b9dbee4"></script>
+      <script src="/assets/js/funding.js"></script>
+      <div class="ff" data-fundflow></div>
+      <div data-filter-root-extra></div>
+      """
+    let srcs = WorkspaceModel.scriptSources(in: html)
+    expect(srcs.contains("assets/js/main.js"),
+           "tools: the ?v= stamp is stripped before comparing")
+    expect(srcs.contains("assets/js/funding.js"),
+           "tools: an unstamped script compares equal too")
+
+    expect(WorkspaceModel.mounts("data-fundflow", in: html),
+           "tools: a bare attribute on a div counts as mounted")
+    expect(!WorkspaceModel.mounts("data-filter-root", in: html),
+           "tools: data-filter-root does not match data-filter-root-extra")
+
+    // ── What the state means, because it decides what the user is told ──
+    let dead = SiteTool(attribute: "data-threshold", name: "Threshold walker",
+                        script: "assets/js/procurement.js",
+                        pages: ["defence/procurement.html"],
+                        unwiredPages: ["defence/procurement.html"])
+    expect(dead.state == .dead,
+           "tools: mounted where its script is absent is dead, not fine")
+    let orphan = SiteTool(attribute: "data-sandbox", name: "Sandbox",
+                          script: "assets/js/tech-lab.js", pages: [], unwiredPages: [])
+    expect(orphan.state == .orphan,
+           "tools: a script no page mounts is orphaned, not dead")
+    let wired = SiteTool(attribute: "data-lagebild", name: "Report map",
+                         script: "assets/js/lagebild.js",
+                         pages: ["news/report-map.html"], unwiredPages: [])
+    expect(wired.state == .wired, "tools: mounted and driven is wired")
+    expect(dead.rank < orphan.rank && orphan.rank < wired.rank,
+           "tools: findings sort above working instruments")
+
+    expect(SiteTool.readableName(for: "data-fundflow") == "Funding route channel",
+           "tools: a known attribute gets its editorial name")
+    expect(SiteTool.readableName(for: "data-brand-new-thing") == "Brand new thing",
+           "tools: an unknown one is derived and looks underived")
+
     return ok
 }
