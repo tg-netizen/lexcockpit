@@ -24,23 +24,23 @@ private func dyn(_ light: String, _ dark: String) -> Color {
 
 extension Color {
     // Surfaces
-    static let bgPage     = dyn("#FAFAFA", "#1C1C1E")   // window background
-    static let bgCard     = dyn("#FFFFFF", "#28282A")   // cards + sidebar
-    static let cardBorder = dyn("#E5E7EB", "#3C3C40")   // 1px hairlines
+    static let bgPage     = dyn("#F7F5F0", "#12141B")   // window background
+    static let bgCard     = dyn("#FFFFFF", "#1B2030")   // cards + sidebar
+    static let cardBorder = dyn("#E0DED8", "#4A5474")   // 1px hairlines
 
     // Ink
-    static let textPrimary   = dyn("#111827", "#F2F2F4")
-    static let textSecondary = dyn("#6B7280", "#A2A2AA")
+    static let textPrimary   = dyn("#111111", "#D9DBE2")
+    static let textSecondary = dyn("#656C7A", "#9AA1B2")
 
     // Accent + status (muted, per the Pro reference)
-    static let accentNavy   = dyn("#1F3A5F", "#8FB0DC")
-    static let navyTint     = dyn("#EDF1F7", "#2E3A4C")  // active sidebar row
-    static let statusGreen  = dyn("#2F7D5B", "#5CBD92")
-    static let statusAmber  = dyn("#9C6B1E", "#D9A94E")
-    static let statusRed    = dyn("#A83232", "#E07272")
+    static let accentNavy   = dyn("#1B2A4A", "#E7EAF2")
+    static let navyTint     = dyn("#EDEAE3", "#2F4166")  // active sidebar row
+    static let statusGreen  = dyn("#0E7C5A", "#5CBD92")
+    static let statusAmber  = dyn("#B45309", "#D9A94E")
+    static let statusRed    = dyn("#C81E1E", "#E88B8B")
 
     // Small warm accent (dirty dots, gold pills) — kept from the site brand
-    static let brandGold  = dyn("#C9B58C", "#C9B58C")
+    static let brandGold  = dyn("#C2A675", "#C2A675")
 
     // Warm paper glow at the top of the Home page (Lemon-style) —
     // cream in light mode, a whisper of navy in dark.
