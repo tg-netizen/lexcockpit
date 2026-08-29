@@ -122,12 +122,13 @@ struct SanctionsTabView: View {
                 stat("\(model.dossiers.count - horiz)", "countries")
                 stat("\(horiz)", "horizontal regimes")
                 Spacer()
-                if let stamp = model.dossiersState.stamp {
-                    Text("read " + Self.stampText(stamp))
-                        .font(.system(size: 11))
-                        .foregroundColor(.textSecondary)
-                        .help(stamp.description)
-                }
+                /* Der eigene Helfer nannte die Zeit, aber nicht die
+                   Quelle. Die gemeinsame Zeile nennt beides, und alle
+                   Bereiche sagen es damit gleich. */
+                Text(model.dossiersState.provenance(source: "politics/sanctions/*.html"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.textSecondary)
+                    .help(model.dossiersState.stamp?.description ?? "not read yet")
             }
 
             if !model.dossiers.isEmpty {
@@ -136,12 +137,6 @@ struct SanctionsTabView: View {
                     .frame(maxWidth: 260)
             }
         }
-    }
-
-    private static func stampText(_ d: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f.localizedString(for: d, relativeTo: Date())
     }
 
     private func stat(_ value: String, _ label: String) -> some View {

@@ -8,11 +8,12 @@ import Foundation
 /// and every bug found that day was in those four. This closes the two that
 /// are pure logic and need no network.
 @MainActor
-func runStateSelfTests() -> Bool {
+func runStateSelfTests() -> (ok: Bool, passed: Int) {
     var ok = true
+    var passed = 0
     func expect(_ cond: Bool, _ name: String) {
         print(cond ? "PASS  \(name)" : "FAIL  \(name)")
-        if !cond { ok = false }
+        if cond { passed += 1 } else { ok = false }
     }
 
     // ── LoadState: the distinction that cost an hour ────────────────────
@@ -609,5 +610,5 @@ func runStateSelfTests() -> Bool {
         expect(false, "bild: die Seite liess sich nicht schreiben (\(error))")
     }
 
-    return ok
+    return (ok, passed)
 }

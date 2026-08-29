@@ -866,9 +866,9 @@ struct WorkspaceView: View {
                             Task { await model.openEntry(entry) }
                         })
         case .radar:       RadarView()
-        case .analytics:   AnalyticsView()
+        case .analytics:   AnalyticsView(site: site)
         case .tracker:     TrackerView()
-        case .defence:     DefenceEditorView()
+        case .defence:     DefenceEditorView(site: site)
         case .pipeline:    PipelineView()
         case .trilogue:    TrilogueView()
         case .enforcement: EnforcementView()
@@ -1429,7 +1429,10 @@ struct DeploysTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("Latest deploys")
+                    /* Netlify liefert keine Gesamtzahl mit, also sagt
+                       die Ueberschrift, was sie zeigt, statt Vollstaendig-
+                       keit zu behaupten. */
+                    Text("The 10 latest deploys")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.textPrimary)
                     if model.deploysLoading { ProgressView().controlSize(.small) }
@@ -1527,7 +1530,9 @@ struct RepoTabView: View {
                 }
 
                 if !model.pulls.isEmpty {
-                    Text("Open pull requests")
+                    /* Vorher "Open pull requests", was alle behauptet.
+                       Die Abfrage holt zwanzig. */
+                    Text("The 20 most recently opened pull requests")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(.textPrimary)
                     VStack(spacing: 8) {
@@ -1552,7 +1557,7 @@ struct RepoTabView: View {
                     }
                 }
 
-                Text("Last commits")
+                Text("The last 15 commits")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(.textPrimary)
                 VStack(spacing: 8) {

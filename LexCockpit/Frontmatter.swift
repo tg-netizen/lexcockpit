@@ -490,11 +490,12 @@ func newArticleTemplate(title: String, author: String,
 
 // MARK: - Self-test (run with `swift run LexCockpit --selftest`)
 
-func runFrontmatterSelfTests() -> Bool {
+func runFrontmatterSelfTests() -> (ok: Bool, passed: Int) {
     var ok = true
+    var passed = 0
     func expect(_ cond: Bool, _ name: String) {
         print(cond ? "PASS  \(name)" : "FAIL  \(name)")
-        if !cond { ok = false }
+        if cond { passed += 1 } else { ok = false }
     }
 
     // 1. Byte-perfect round-trip with unknown keys, quoted scalars, lists.
@@ -734,5 +735,5 @@ func runFrontmatterSelfTests() -> Bool {
     expect(grouped.reduce(0) { $0 + $1.1.count } == mixed.count,
            "date grouping keeps every entry")
 
-    return ok
+    return (ok, passed)
 }

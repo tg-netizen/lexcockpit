@@ -217,7 +217,12 @@ struct ToolsTabView: View {
             stat("\(orphan)", "orphaned", tint: orphan > 0 ? .statusAmber : nil)
             Spacer()
             if model.toolsScanned.pages > 0 {
-                Text("read \(model.toolsScanned.scripts) scripts, \(model.toolsScanned.pages) pages")
+                /* Umfang UND Zeitpunkt. Der Umfang stand hier schon,
+                   der Zeitpunkt fehlte, und das Register wird eine ganze
+                   Sitzung lang zwischengespeichert. */
+                Text("read \(model.toolsScanned.scripts) scripts, "
+                     + "\(model.toolsScanned.pages) pages · "
+                     + model.toolsState.provenance(source: "github tree"))
                     .font(.system(size: 11))
                     .foregroundColor(.textSecondary)
             }

@@ -110,7 +110,8 @@ struct DesignTabView: View {
 
                 if let sheet = model.design {
                     Text("\(sheet.tokens.count) tokens, "
-                         + "\(sheet.tokens.filter { $0.dark != nil }.count) with a dark value")
+                         + "\(sheet.tokens.filter { $0.dark != nil }.count) with a dark value · "
+                         + model.designState.provenance(source: "assets/css/style.css"))
                         .font(.system(size: 11)).foregroundColor(.textSecondary)
                     if sheet.blocksFound < 3 {
                         Pill(text: "only \(sheet.blocksFound) of 3 blocks found",

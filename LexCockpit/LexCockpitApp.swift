@@ -24,7 +24,21 @@ struct LexCockpitApp: App {
                tested parts already worked and the untested four were where
                every bug lived. These cover the two that are pure logic. */
             let b = MainActor.assumeIsolated { runStateSelfTests() }
-            exit(a && b ? 0 : 1)
+            /* Und die App auf ihre eigene Zahl festnageln. Der
+               Willkommensschirm nennt eine Anzahl gruener Tests; hier
+               wird sie gegen die gezaehlte gehalten. Wer einen Test
+               hinzufuegt und AppFacts.selftests vergisst, bekommt einen
+               roten Lauf statt eines stillen Irrtums. */
+            /* Plus eins fuer diese Pruefung selbst. Die Zahl auf dem
+               Schirm soll das sein, was jemand nachzaehlt, und das ist
+               `--selftest | grep -c PASS`, nicht die Anzahl der
+               Behauptungen in den Suiten. */
+            let counted = a.passed + b.passed + 1
+            let claimOK = counted == AppFacts.selftests
+            print(claimOK
+                ? "PASS  app: der Willkommensschirm nennt \(AppFacts.selftests) gruene Tests, gezaehlt \(counted)"
+                : "FAIL  app: der Willkommensschirm nennt \(AppFacts.selftests) gruene Tests, gezaehlt sind \(counted)")
+            exit(a.ok && b.ok && claimOK ? 0 : 1)
         }
         /* `--designcheck <style.css>` liest die echte Datei, meldet, was
            gefunden wurde, und prueft die eine Zusage, auf der der
@@ -73,6 +87,59 @@ struct LexCockpitApp: App {
                 print("FEHLER: \(error.localizedDescription)")
                 exit(1)
             }
+        }
+        /* `--rendercheck <site-root>` beweist, dass die Vorschau zeigt,
+           was der Deploy baut. Fuer jede Seite in data/pages wird der
+           Rumpf hier in Swift gerendert und Zeichen fuer Zeichen mit dem
+           verglichen, was der Node-Generator in die Zielseite geschrieben
+           hat. Zwei Renderer, die auseinanderdriften, sind eine
+           Fehlerquelle mit Ansage; das hier ist der Zaun darum. */
+        if let i = CommandLine.arguments.firstIndex(of: "--rendercheck"),
+           CommandLine.arguments.indices.contains(i + 1) {
+            let root = CommandLine.arguments[i + 1]
+            let fm = FileManager.default
+            let dir = root + "/data/pages"
+            guard let names = try? fm.contentsOfDirectory(atPath: dir) else {
+                print("FEHLER: \(dir) nicht lesbar"); exit(1)
+            }
+            var ok = 0, bad = 0
+            for name in names.sorted() where name.hasSuffix(".json") {
+                let jsonPath = dir + "/" + name
+                guard let json = try? String(contentsOfFile: jsonPath, encoding: .utf8),
+                      let page = try? SitePage.parse(path: "data/pages/" + name,
+                                                     sha: nil, json: json) else {
+                    print("FAIL  \(name): nicht lesbar"); bad += 1; continue
+                }
+                let targetPath = root + "/" + page.target
+                guard let target = try? String(contentsOfFile: targetPath, encoding: .utf8),
+                      let a = target.range(of: "<!-- LAYOUT-START -->"),
+                      let b = target.range(of: "<!-- LAYOUT-END -->") else {
+                    print("FAIL  \(name): Ziel oder Marker fehlt"); bad += 1; continue
+                }
+                /* Der Generator schreibt Marker, Zeilenumbruch, Rumpf,
+                   Zeilenumbruch, vier Leerzeichen, Endmarker. */
+                let between = String(target[a.upperBound..<b.lowerBound])
+                let fromNode = between
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \n"))
+                let fromSwift = BlockRenderer.body(page)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \n"))
+                if fromNode == fromSwift {
+                    ok += 1
+                    print("PASS  \(page.target)  (\(page.blockCount) Bloecke)")
+                } else {
+                    bad += 1
+                    print("FAIL  \(page.target)")
+                    let n = Array(fromNode), w = Array(fromSwift)
+                    for k in 0..<max(n.count, w.count) where k >= min(n.count, w.count) || n[k] != w[k] {
+                        let from = max(0, k - 60)
+                        print("      node : " + String(n[from..<min(n.count, k + 60)]))
+                        print("      swift: " + String(w[from..<min(w.count, k + 60)]))
+                        break
+                    }
+                }
+            }
+            print("\n\(ok) gleich, \(bad) abweichend")
+            exit(bad == 0 ? 0 : 1)
         }
         // `--roundtrip <dir>` → run the WYSIWYG round-trip data-safety test
         // against real article files (offscreen Toast UI editor) and exit.
@@ -756,6 +823,8 @@ struct QuickSwitcherView: View {
             .padding(12)
             Divider()
             List {
+                /* Ohne diesen Hinweis schliesst man aus einer leeren
+                     Stelle, ein Artikel existiere nicht. */
                 ForEach(items.prefix(12)) { item in
                     Button { fire(item) } label: {
                         HStack(spacing: 8) {
@@ -767,6 +836,10 @@ struct QuickSwitcherView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                }
+                if items.count > 12 {
+                    Text("Showing 12 of \(items.count) matches. Type more to narrow it.")
+                        .font(.caption).foregroundColor(.textSecondary)
                 }
             }
             .listStyle(.inset)

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import WebKit
 
 /*  LayoutTab.swift — moving the website around without touching HTML
  *  ═══════════════════════════════════════════════════════════════════
@@ -24,6 +25,7 @@ struct LayoutTabView: View {
     let site: SiteProject
     @State private var selected: String?
     @State private var openBlock: UUID?
+    @State private var previewing = false
 
     private var page: SitePage? {
         model.pages.first { $0.id == (selected ?? model.pages.first?.id) }
@@ -56,7 +58,12 @@ struct LayoutTabView: View {
                               detail: "The layouts are read from the repo when you open this panel.",
                               systemImage: "clock")
                 } else if let p = page {
-                    editor(p)
+                    if previewing {
+                        PagePreview(model: model, page: p, site: site)
+                            .frame(minHeight: 520)
+                    } else {
+                        editor(p)
+                    }
                 }
             }
             .padding(20)
@@ -105,6 +112,16 @@ struct LayoutTabView: View {
                 ErrorCard(title: "Not saved", detail: err, retry: nil)
             }
 
+            Picker("", selection: $previewing) {
+                Text("Blocks").tag(false)
+                Text("Preview").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 190)
+            .help("The preview renders the blocks with the site's own stylesheet, "
+                  + "using the same rules as the deploy")
+
             if model.pages.count > 1 {
                 Picker("", selection: Binding(
                     get: { selected ?? model.pages.first?.id ?? "" },
@@ -126,6 +143,9 @@ struct LayoutTabView: View {
                     if model.pagesDirty.contains(p.id) {
                         Pill(text: "unsaved", color: .statusAmber)
                     }
+                    Text(model.pagesState.provenance(source: "data/pages"))
+                        .font(.system(size: 11))
+                        .foregroundColor(.textSecondary)
                 }
             }
         }
@@ -590,5 +610,98 @@ private struct ImageBlockEditor: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))
         }
+    }
+}
+
+
+/*  Die Vorschau
+ *  ═══════════════════════════════════════════════════════════════════
+ *  Bis hierher war die Schleife Minuten lang: aendern, speichern, auf
+ *  Netlify warten, nachsehen. Jetzt steht das Ergebnis daneben, gerendert
+ *  mit BlockRenderer, das heisst mit denselben Regeln wie der Deploy.
+ *  Dass "dieselben" nicht bloss "aehnliche" heisst, prueft
+ *  `--rendercheck` gegen alle Seiten des echten Repos.
+ *
+ *  Das Stylesheet kommt aus dem Repo, nicht aus einer Kopie hier. Eine
+ *  Vorschau mit eigener Kopie waere genau so lange richtig, bis jemand die
+ *  Website anfasst.
+ *
+ *  Die Grundadresse zeigt auf die Website, damit Schriften und Bilder mit
+ *  relativem Pfad sich aufloesen. Sind sie nicht erreichbar, faellt die
+ *  Vorschau auf Systemschriften zurueck. Sie zeigt dann das Layout und
+ *  nicht die Typografie, und sagt das auch.
+ */
+private struct PagePreview: View {
+    @ObservedObject var model: WorkspaceModel
+    let page: SitePage
+    let site: SiteProject
+    @Environment(\.colorScheme) private var scheme
+    @State private var webView = WKWebView()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                if model.designLoading {
+                    ProgressView().controlSize(.small)
+                    Text("Fetching the stylesheet").font(.system(size: 11))
+                        .foregroundColor(.textSecondary)
+                } else if model.design == nil {
+                    Text("Without the stylesheet this shows the structure, not the design.")
+                        .font(.system(size: 11)).foregroundColor(.statusAmber)
+                    Button("Fetch it") { Task { await model.loadDesign() } }
+                        .buttonStyle(.plain).foregroundColor(.accentNavy)
+                        .font(.system(size: 11))
+                } else {
+                    Text("Rendered with the same rules as the deploy, "
+                         + "and the site's own stylesheet.")
+                        .font(.system(size: 11)).foregroundColor(.textSecondary)
+                }
+                Spacer()
+            }
+            WebViewRepresentable(webView: webView)
+                .overlay(RoundedRectangle(cornerRadius: 2)
+                    .stroke(Color.cardBorder, lineWidth: 1))
+        }
+        .task(id: reloadKey) { render() }
+    }
+
+    /// Neu zeichnen, wenn sich Inhalt, Stylesheet oder Theme aendert.
+    private var reloadKey: String {
+        (try? page.encoded()).map { String($0.hashValue) } ?? page.id
+            + (model.design == nil ? "-nocss" : "-css")
+            + (scheme == .dark ? "-d" : "-l")
+    }
+
+    private func render() {
+        let css = model.design.map { sheet in
+            /* Der ungeaenderte Stand aus dem Repo plus alles, was im
+               Design-Bereich gerade offen ist. So zeigt die Vorschau auch
+               eine noch nicht gespeicherte Farbe. */
+            sheet.rendered()
+        } ?? ""
+        let theme = scheme == .dark ? "dark" : "light"
+        let html = """
+        <!doctype html>
+        <html lang="en" data-theme="\(theme)">
+        <head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>\(css)</style>
+        <style>
+          /* Nur fuer die Vorschau: der Rumpf steht hier ohne Kopf und Fuss,
+             also braucht er den Rand, den sonst die Seite gibt. */
+          body { margin: 0; }
+          main { max-width: none; }
+        </style>
+        </head>
+        <body>
+        <main class="container" style="padding:1.6rem 1.25rem 3rem;">
+          <div class="dd-wrap">
+        \(BlockRenderer.body(page))
+          </div>
+        </main>
+        </body></html>
+        """
+        let base = site.url.flatMap { URL(string: $0) }
+        webView.loadHTMLString(html, baseURL: base)
     }
 }

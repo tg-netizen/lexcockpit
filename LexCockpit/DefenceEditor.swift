@@ -258,12 +258,15 @@ final class DefenceStore: ObservableObject {
 
 struct DefenceEditorView: View {
     @EnvironmentObject var store: CockpitStore
+    /* Wie bei Analytics: der Bereich steht unter einem Projekt, also
+       nimmt er dessen Repo und nicht das erste, das eines hat. */
+    var site: SiteProject?
     @StateObject private var model = DefenceStore()
     @State private var editing: Fitment?
     @State private var commitMessage = ""
 
     private var repo: String? {
-        store.sites.first(where: { ($0.repo ?? "").isEmpty == false })?.repo
+        site?.repo ?? store.sites.first(where: { ($0.repo ?? "").isEmpty == false })?.repo
     }
 
     var body: some View {
