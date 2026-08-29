@@ -1632,7 +1632,7 @@ struct EditorView: View {
         let btn = Button(action: action) {
             Image(systemName: system)
                 .font(.system(size: 12.5))
-                .foregroundColor(active ? .brandGold : .white.opacity(0.92))
+                .foregroundColor(active ? .white : .white.opacity(0.55))
                 .frame(width: 26, height: 24)
                 .contentShape(Rectangle())
         }
@@ -1682,7 +1682,7 @@ struct EditorView: View {
         } label: {
             Image(systemName: "arrow.up.forward.app")
                 .font(.system(size: 12.5))
-                .foregroundColor(external.activeEditorName != nil ? .brandGold : .white.opacity(0.92))
+                .foregroundColor(external.activeEditorName != nil ? .white : .white.opacity(0.55))
         }
         .menuStyle(.borderlessButton)
         .frame(width: 32)
@@ -1945,7 +1945,7 @@ struct EditorView: View {
                 Label("Publish now", systemImage: "paperplane.fill").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.accentNavy)
+            .tint(.accentNavySolid)
             .disabled(EditorialGate.blocker(body: doc.bodyText, type: doc.articleType, overrideFlag: doc.overrideFlag, overrideUntil: doc.overrideUntil) != nil)
 
             HStack(spacing: 8) {

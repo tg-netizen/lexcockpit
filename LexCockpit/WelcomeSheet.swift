@@ -80,7 +80,7 @@ struct WelcomeSheet: View {
             .padding(.horizontal, 40)
         }
         .overlay(alignment: .topLeading)     { tile("\(store.sites.count) PROJECT\(store.sites.count == 1 ? "" : "S")").padding(14) }
-        .overlay(alignment: .topTrailing)    { tile("54 SELFTESTS\nGREEN").padding(14) }
+        .overlay(alignment: .topTrailing)    { tile("\(AppFacts.selftests) SELFTESTS\nGREEN").padding(14) }
         .overlay(alignment: .bottomLeading)  { tile("AUTO-DATA\nMON + THU").padding(14) }
         .overlay(alignment: .bottomTrailing) { tile("BLOCK VAULT\nBYTE-SAFE").padding(14) }
         .frame(width: 620, height: 470)
@@ -100,4 +100,25 @@ struct WelcomeSheet: View {
     private func markSeen() {
         UserDefaults.standard.set(AppVersion.current, forKey: "lastSeenVersion")
     }
+}
+
+
+/*  Zahlen ueber die App selbst
+ *  ═══════════════════════════════════════════════════════════════════
+ *  Auf diesem Schirm stand "54 SELFTESTS GREEN", waehrend es 191 waren.
+ *  Eine falsche Zahl auf dem Begruessungsschirm einer App, deren Zweck
+ *  das Pruefen von Behauptungen ist, ist der teuerste kleine Fehler im
+ *  Projekt: sie lehrt den Nutzer, den Zahlen hier nicht zu glauben.
+ *
+ *  Der Wert steht deshalb nicht mehr im Text, sondern hier, und der
+ *  Selbsttest prueft ihn gegen die Zahl, die er selbst gezaehlt hat. Wer
+ *  einen Test hinzufuegt und die Zahl vergisst, bekommt einen roten
+ *  Testlauf, keinen stillen Irrtum. Die Zahl kann nur noch falsch sein,
+ *  wenn jemand sie absichtlich falsch macht.
+ */
+enum AppFacts {
+    /// Genau die Anzahl der PASS-Zeilen von `--selftest`, also das, was
+    /// `swift run LexCockpit --selftest | grep -c PASS` ausgibt. Der
+    /// Selbsttest setzt das durch und schlaegt fehl, wenn es nicht stimmt.
+    static let selftests = 192
 }

@@ -355,7 +355,7 @@ struct UpdateActionButtons: View {
                         Button(compact ? "Install & relaunch" : "Install Update & Relaunch") {
                             Task { await checker.installUpdate() }
                         }
-                        .buttonStyle(.borderedProminent).tint(.accentNavy)
+                        .buttonStyle(.borderedProminent).tint(.accentNavySolid)
                         .controlSize(compact ? .small : .regular)
                     } else if let url = checker.available?.url {
                         Link(compact ? "Download" : "Download from GitHub", destination: url)

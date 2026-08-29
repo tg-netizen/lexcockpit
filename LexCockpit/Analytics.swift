@@ -113,9 +113,14 @@ final class AnalyticsModel: ObservableObject {
 struct AnalyticsView: View {
     @EnvironmentObject var store: CockpitStore
     @StateObject private var model = AnalyticsModel()
+    /* Der Bereich steht in der Seitenleiste UNTER einem Projekt und
+       verspricht damit dessen Zahlen. Vorher nahm er immer das erste
+       Projekt, was mit nur einem Projekt nicht auffaellt und mit zweien
+       eine Luege ist. Jetzt bekommt er das Projekt gesagt. */
+    var site: SiteProject?
 
     private var siteHost: String {
-        (store.sites.first?.url ?? "https://lexdigestglobal.com")
+        ((site ?? store.sites.first)?.url ?? "https://lexdigestglobal.com")
             .replacingOccurrences(of: "https://", with: "")
             .replacingOccurrences(of: "http://", with: "")
     }
@@ -135,7 +140,10 @@ struct AnalyticsView: View {
             }
 
             if !model.topPages.isEmpty {
-                Text("Top pages")
+                /* Plausible liefert hier keine Gesamtzahl, der Decoder
+                   kennt nur die Ergebnisliste. Also nennt die Ueberschrift
+                   die Zahl und den Zeitraum. */
+                Text("The 8 most visited pages, 30 days")
                     .font(.system(size: 18, weight: .bold)).foregroundColor(.textPrimary)
                 VStack(spacing: 8) {
                     ForEach(model.topPages) { page in
@@ -152,7 +160,7 @@ struct AnalyticsView: View {
                 }
             }
 
-            Text("Recent newsletters")
+            Text("The 5 most recently sent campaigns")
                 .font(.system(size: 18, weight: .bold)).foregroundColor(.textPrimary)
                 .padding(.top, 8)
             if let err = model.mlError {

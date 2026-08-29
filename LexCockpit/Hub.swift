@@ -23,6 +23,12 @@ enum UserProjects {
 struct ProjectHubView: View {
     @EnvironmentObject var store: CockpitStore
     var navigate: (SidebarSelection) -> Void
+    /* The desks live inside a project now, so a tile on Home cannot just
+       say "Radar", it has to say whose radar. With one site configured
+       that is the site; with none the tile has nowhere to go and hides
+       itself rather than pretending. */
+    var openSection: (SiteProject, WorkspaceTab) -> Void
+    private var primarySite: SiteProject? { store.sites.first }
     @State private var showAdd = false
 
     /// First name from the macOS account (real data, zero setup);
@@ -80,18 +86,17 @@ struct ProjectHubView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 // ── Right: Today rail ──
-                TodayRail(navigate: navigate)
+                TodayRail(navigate: navigate, openSection: openSection)
                     .frame(width: 292)
             }
             .padding(28)
         }
-        .background(
-            // Warm paper glow fading into the page — Lemon-style Home.
-            LinearGradient(stops: [
-                .init(color: .pageGlow, location: 0),
-                .init(color: .bgPage,  location: 0.38)
-            ], startPoint: .top, endPoint: .bottom)
-        )
+        /* The warm glow that used to sit here was a gradient from
+           #F5F0E6 to #FAFAFA: a contrast of 1.088, which is below the
+           threshold at which a screen shows a difference at all. It cost
+           a gradient and a token and delivered nothing. The page is now
+           the site's own warm paper, flat. */
+        .background(Color.bgPage)
         .sheet(isPresented: $showAdd) { AddProjectSheet() }
     }
 
@@ -148,7 +153,7 @@ struct ProjectCard: View {
                 HStack(spacing: 12) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 10).fill(Color.accentNavy)
-                        Text(initials).font(.system(size: 16, weight: .bold)).foregroundColor(.white)
+                        Text(initials).font(.system(size: 16, weight: .bold)).foregroundColor(.bgCard)
                     }
                     .frame(width: 44, height: 44)
                     VStack(alignment: .leading, spacing: 2) {
@@ -296,6 +301,11 @@ struct TodayRail: View {
     @ObservedObject private var queue = CommitQueue.shared
     @State private var waitingCount: Int? = nil
     var navigate: (SidebarSelection) -> Void
+    /* The desks live inside a project now, so a tile on Home cannot just
+       say "Radar", it has to say whose radar. With one site configured
+       that is the site; with none the tile has nowhere to go and hides
+       itself rather than pretending. */
+    var openSection: (SiteProject, WorkspaceTab) -> Void
 
     private var nextDeadline: Regulation? {
         store.regulations
@@ -372,7 +382,7 @@ struct TodayRail: View {
             }
 
             // Radar
-            Button { navigate(.section(.radar)) } label: {
+            Button { if let s = primarySite { openSection(s, .radar) } } label: {
                 railCard {
                     HStack(spacing: 8) {
                         Image(systemName: "dot.radiowaves.left.and.right")
@@ -412,7 +422,7 @@ struct TodayRail: View {
                 miniKPI("\(store.blockedCount)", "Blocked", .statusRed)
                 miniKPI("\(store.negotiations.count)", "Trilogue", .accentNavy)
             }
-            Button { navigate(.section(.tracker)) } label: {
+            Button { if let s = primarySite { openSection(s, .tracker) } } label: {
                 Text("Open the tracker →")
                     .font(.system(size: 12, weight: .medium)).foregroundColor(.accentNavy)
             }
@@ -490,7 +500,7 @@ struct AddProjectSheet: View {
                         content_paths: paths.isEmpty ? nil : paths))
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent).tint(.accentNavy)
+                .buttonStyle(.borderedProminent).tint(.accentNavySolid)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!valid)
             }

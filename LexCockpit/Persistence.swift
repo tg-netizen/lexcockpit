@@ -67,7 +67,11 @@ enum BookmarkStore {
 
 struct SessionState: Codable, Equatable {
     var selectionSite: String?        // site id, or nil
-    var selectionSection: String?     // CockpitSection rawValue
+    /// Legacy: the rawValue of a top-level section, from the builds where
+    /// the desks sat beside the projects instead of inside them. Kept so an
+    /// old saved session still decodes; it is cleared on the first launch
+    /// that reads it, and nothing writes it any more.
+    var selectionSection: String?
     var workspaceTab: String?         // WorkspaceTab rawValue
     var articlePath: String?          // open article repo path
     var editorMode: Int?              // EditorMode rawValue
@@ -141,6 +145,44 @@ final class CockpitAppDelegate: NSObject, NSApplicationDelegate {
             NotificationCenter.default.post(name: Self.openMDNotification, object: url)
         }
     }
+
+    /* ── Getting the window back ──────────────────────────────────────
+       This app keeps a MenuBarExtra, so closing the last window does not
+       quit it: it keeps running with nothing on screen. And the New Item
+       command is deliberately removed, so there is no Cmd-N either. Put
+       those two together and a closed window is unrecoverable except by
+       killing the process, which is exactly the state this app got into.
+
+       Returning true asks AppKit to restore the app's windows on the next
+       activation, which is what clicking the Dock icon or opening the app
+       again is supposed to do. Belt and braces: if AppKit finds nothing to
+       restore, un-minimise and raise whatever window still exists. */
+    /* ── Getting the window back ──────────────────────────────────────
+       This app keeps a MenuBarExtra, so closing the last window does not
+       quit it: it keeps running with nothing on screen. Put that together
+       with a removed New Item command and a closed window was
+       unrecoverable except by killing the process.
+
+       Returning true and doing nothing else is deliberate. An earlier
+       version raised whatever window it could find first, and that made
+       things worse rather than better: it handed AppKit a leftover
+       degenerate window, AppKit concluded there was already something
+       visible, and declined to build a real one. Let AppKit decide. */
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        true
+    }
+
+    /* Window restoration is switched off for this app on purpose. It
+       restores "there were no windows last time" just as faithfully as it
+       restores a position, and after any hard stop that is the state it
+       finds. The cost of restoring a window frame is not worth an app
+       that sometimes opens onto nothing. */
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+        NSApp.windows.forEach { $0.isRestorable = false }
+    }
+
 
     func applicationWillTerminate(_ notification: Notification) {
         for doc in WorkspaceModel.allOpenEditors() { doc.autosaveNow() }

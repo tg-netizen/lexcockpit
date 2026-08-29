@@ -8,11 +8,12 @@ import Foundation
 /// and every bug found that day was in those four. This closes the two that
 /// are pure logic and need no network.
 @MainActor
-func runStateSelfTests() -> Bool {
+func runStateSelfTests() -> (ok: Bool, passed: Int) {
     var ok = true
+    var passed = 0
     func expect(_ cond: Bool, _ name: String) {
         print(cond ? "PASS  \(name)" : "FAIL  \(name)")
-        if !cond { ok = false }
+        if cond { passed += 1 } else { ok = false }
     }
 
     // ── LoadState: the distinction that cost an hour ────────────────────
@@ -344,5 +345,270 @@ func runStateSelfTests() -> Bool {
     expect(!UpdateChecker.isNewer("0.25", than: "0.25.0"),
            "update: a short version is not newer than its padded self")
 
-    return ok
+    // ── The tool register: the rule that separates a mount from a part ──
+    // This is the whole derivation. If the comma stops mattering, the app
+    // starts reporting 199 instruments instead of 30, and every one of the
+    // extra 169 is an inner part of another tool.
+    let js = """
+      (function () {
+        function $(s, r) { return (r || document).querySelector(s); }
+        function $$(s, r) { return [].slice.call((r || document).querySelectorAll(s)); }
+        function initFlow(root) {
+          var svg = $('[data-ff-svg]', root);
+          var btns = $$('[data-ff-route]', root);
+        }
+        function boot() { $$('[data-fundflow]').forEach(initFlow); }
+      })();
+      """
+    let mounts = WorkspaceModel.mountPoints(in: js)
+    expect(mounts == ["data-fundflow"],
+           "tools: a mount point is queried without a root")
+    expect(!mounts.contains("data-ff-svg"),
+           "tools: an inner part queried WITH a root is not an instrument")
+    expect(!mounts.contains("data-ff-route"),
+           "tools: the same holds for $$ with a root")
+
+    expect(WorkspaceModel.mountPoints(in: "document.querySelectorAll('[data-lagebild]')")
+             == ["data-lagebild"],
+           "tools: the plain querySelectorAll form counts too")
+    expect(WorkspaceModel.mountPoints(in: "$$(\"[data-sbx]\")") == ["data-sbx"],
+           "tools: double quotes are the same selector as single quotes")
+    expect(WorkspaceModel.mountPoints(in: "$$('[data-x]', root)").isEmpty,
+           "tools: a root argument disqualifies it, whitespace or not")
+
+    // ── The cache stamp, which a naive comparison trips over ────────────
+    let html = """
+      <script src="/assets/js/main.js?v=5b9dbee4"></script>
+      <script src="/assets/js/funding.js"></script>
+      <div class="ff" data-fundflow></div>
+      <div data-filter-root-extra></div>
+      """
+    let srcs = WorkspaceModel.scriptSources(in: html)
+    expect(srcs.contains("assets/js/main.js"),
+           "tools: the ?v= stamp is stripped before comparing")
+    expect(srcs.contains("assets/js/funding.js"),
+           "tools: an unstamped script compares equal too")
+
+    expect(WorkspaceModel.mounts("data-fundflow", in: html),
+           "tools: a bare attribute on a div counts as mounted")
+    expect(!WorkspaceModel.mounts("data-filter-root", in: html),
+           "tools: data-filter-root does not match data-filter-root-extra")
+
+    // ── What the state means, because it decides what the user is told ──
+    let dead = SiteTool(attribute: "data-threshold", name: "Threshold walker",
+                        script: "assets/js/procurement.js",
+                        pages: ["defence/procurement.html"],
+                        unwiredPages: ["defence/procurement.html"])
+    expect(dead.state == .dead,
+           "tools: mounted where its script is absent is dead, not fine")
+    let orphan = SiteTool(attribute: "data-sandbox", name: "Sandbox",
+                          script: "assets/js/tech-lab.js", pages: [], unwiredPages: [])
+    expect(orphan.state == .orphan,
+           "tools: a script no page mounts is orphaned, not dead")
+    let wired = SiteTool(attribute: "data-lagebild", name: "Report map",
+                         script: "assets/js/lagebild.js",
+                         pages: ["news/report-map.html"], unwiredPages: [])
+    expect(wired.state == .wired, "tools: mounted and driven is wired")
+    expect(dead.rank < orphan.rank && orphan.rank < wired.rank,
+           "tools: findings sort above working instruments")
+
+    expect(SiteTool.readableName(for: "data-fundflow") == "Funding route channel",
+           "tools: a known attribute gets its editorial name")
+    expect(SiteTool.readableName(for: "data-brand-new-thing") == "Brand new thing",
+           "tools: an unknown one is derived and looks underived")
+
+    // ── Der Layout-Editor darf nichts verlieren ────────────────────────
+    // Das ist die Zusage, auf der alles andere steht: eine Seitendatei
+    // geht durch den Editor und kommt vollstaendig wieder heraus, auch
+    // die Felder und Blocktypen, die dieser Build nie gesehen hat.
+    let pageJSON = """
+    {
+      "id": "probe",
+      "title": "Probe",
+      "target": "x/index.html",
+      "_note": "ein Feld, das die App nicht kennt",
+      "zukunft": { "tief": [1, 2, 3], "an": true },
+      "sections": [
+        {
+          "id": "a",
+          "heading": "Erster",
+          "eyebrow": ["Auge"],
+          "unbekannt": "bleibt",
+          "blocks": [
+            { "type": "lead", "text": "eins" },
+            { "type": "kachelgitter", "spalten": 3, "eintraege": ["x", "y"] },
+            { "type": "prose", "text": "zwei" }
+          ]
+        }
+      ]
+    }
+    """
+    do {
+        let page = try SitePage.parse(path: "data/pages/probe.json", sha: "abc", json: pageJSON)
+        expect(page.id == "probe", "layout: die Kennung kommt aus dem Dateinamen")
+        expect(page.sections.count == 1 && page.sections[0].blocks.count == 3,
+               "layout: Abschnitte und Bloecke werden gelesen")
+        expect(page.sections[0].blocks[1].type == "kachelgitter",
+               "layout: ein unbekannter Blocktyp wird gelesen, nicht verworfen")
+        expect(!page.sections[0].blocks[1].isEditable,
+               "layout: und er meldet sich als nicht bearbeitbar")
+
+        let out = try page.encoded()
+        for needle in ["_note", "zukunft", "unbekannt", "kachelgitter", "eintraege", "spalten"] {
+            expect(out.contains(needle),
+                   "layout: \(needle) ueberlebt das Schreiben")
+        }
+        expect(out.contains("\"spalten\" : 3") || out.contains("\"spalten\": 3"),
+               "layout: eine ganze Zahl bleibt eine ganze Zahl, kein 3.0")
+
+        // Verschieben aendert die Reihenfolge und sonst nichts.
+        var moved = page
+        moved.sections[0].blocks.swapAt(0, 2)
+        expect(moved.sections[0].blocks[0].text == "zwei"
+               && moved.sections[0].blocks[2].text == "eins",
+               "layout: Verschieben vertauscht genau zwei Bloecke")
+        let out2 = try moved.encoded()
+        expect(out2.contains("kachelgitter"),
+               "layout: der unbekannte Block ueberlebt auch das Verschieben")
+        expect(out2.count == out.count,
+               "layout: Verschieben aendert die Groesse der Datei nicht")
+
+        // Ein frischer Block traegt die Felder seines Typs.
+        let img = PageBlock.make("image")
+        expect(img.type == "image" && img.fields["alt"] != nil,
+               "layout: ein neues Bild bringt sein alt-Feld mit")
+        expect(PageBlock.make("gaps").fields["items"] != nil,
+               "layout: neue Luecken bringen ihre Liste mit")
+    } catch {
+        expect(false, "layout: die Probedatei liess sich nicht lesen (\(error))")
+    }
+
+    // ── Die Design-Tokens ──────────────────────────────────────────────
+    // Der Kern ist nicht das Bearbeiten, sondern das Nicht-Anfassen: eine
+    // Datei mit neuntausend Zeilen darf beim Speichern nur an den Stellen
+    // anders sein, die jemand geaendert hat.
+    let cssProbe = """
+    /* Kopf */
+    :root {
+      --bg:      #F7F5F0;
+      --ink:     #111111;
+      --muted:   #656C7A;
+      --surface: #FFFFFF;
+      --accent:  #1B2A4A;
+      --bg-cream: var(--bg);
+      --max-w:   1200px;
+    }
+    .etwas { color: var(--ink); }
+    :root[data-theme="dark"] {
+      --bg:      #12141B;
+      --ink:     #D9DBE2;
+      --surface: #1B2030;
+    }
+    .anderes { color: red; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg:      #12141B;
+        --ink:     #D9DBE2;
+        --surface: #1B2030;
+      }
+    }
+    .ende { display: none; }
+    """
+    do {
+        let sheet = try DesignSheet(css: cssProbe, sha: "s1")
+        expect(sheet.blocksFound == 3, "design: alle drei Token-Bloecke gefunden")
+        expect(sheet.tokens.count == 7, "design: sieben helle Tokens gelesen")
+        expect(sheet.tokens.first { $0.name == "bg" }?.dark == "#12141B",
+               "design: der Dunkelwert wird dem Token zugeordnet")
+        expect(sheet.tokens.first { $0.name == "max-w" }?.dark == nil,
+               "design: ein Token ohne Dunkelwert bekommt keinen erfunden")
+        expect(sheet.darkOutOfSync.isEmpty,
+               "design: beide Dunkel-Bloecke tragen dieselben Tokens")
+
+        expect(sheet.rendered() == cssProbe,
+               "design: ohne Aenderung ist die Datei zeichengleich")
+
+        // Eine helle Farbe aendern.
+        var a = sheet
+        if let i = a.tokens.firstIndex(where: { $0.name == "muted" }) {
+            a.tokens[i].light = "#5A6070"
+        }
+        let outA = a.rendered()
+        expect(outA.contains("--muted:   #5A6070;"), "design: der neue Wert steht drin")
+        expect(!outA.contains("#656C7A"), "design: der alte Wert ist weg")
+        expect(outA.count == cssProbe.count, "design: gleiche Laenge, nur der Wert ersetzt")
+        expect(outA.contains(".anderes { color: red; }") && outA.contains(".ende { display: none; }"),
+               "design: der Rest der Datei ist unberuehrt")
+
+        // Einen Dunkelwert aendern: muss in BEIDE Bloecke.
+        var b = sheet
+        if let i = b.tokens.firstIndex(where: { $0.name == "surface" }) {
+            b.tokens[i].dark = "#202638"
+        }
+        let outB = b.rendered()
+        expect(outB.components(separatedBy: "#202638").count - 1 == 2,
+               "design: ein Dunkelwert wird in beide Dunkel-Bloecke geschrieben")
+        expect(!outB.contains("#1B2030"), "design: der alte Dunkelwert ist nirgends mehr")
+        expect(outB.contains("--surface: #FFFFFF;"),
+               "design: der helle Wert desselben Tokens bleibt unangetastet")
+
+        // Kontrast, gegen von Hand nachgerechnete Werte.
+        let t = sheet.tokens
+        if let r = CSSColour.contrast("#656C7A", "#FFFFFF", in: t, dark: false) {
+            expect(abs(r - 5.28) < 0.02, "design: Kontrast 5.28 fuer muted auf weiss")
+        } else { expect(false, "design: Kontrast fuer muted konnte nicht gerechnet werden") }
+        if let r = CSSColour.contrast("#1B2A4A", "#FFFFFF", in: t, dark: false) {
+            expect(abs(r - 14.22) < 0.02, "design: Kontrast 14.22 fuer accent auf weiss")
+        } else { expect(false, "design: Kontrast fuer accent konnte nicht gerechnet werden") }
+        if let r = CSSColour.contrast("#C2A675", "#FFFFFF", in: t, dark: false) {
+            expect(abs(r - 2.33) < 0.02, "design: Gold auf weiss ist 2.33 und faellt durch")
+        } else { expect(false, "design: Kontrast fuer Gold konnte nicht gerechnet werden") }
+
+        // var() eine Ebene tief, und was nicht rechenbar ist.
+        expect(CSSColour.parse("var(--bg)", in: t, dark: false) != nil,
+               "design: var(--bg) wird aufgeloest")
+        expect(CSSColour.parse("var(--bg)", in: t, dark: true).map { $0.r < 0.2 } == true,
+               "design: var(--bg) loest im Dunkelmodus den Dunkelwert auf")
+        expect(CSSColour.contrast("1200px", "#FFFFFF", in: t, dark: false) == nil,
+               "design: was keine Farbe ist, liefert nichts statt 1.0")
+    } catch {
+        expect(false, "design: die Probe-CSS liess sich nicht lesen (\(error))")
+    }
+
+    // ── Bilder: was fehlt, muss auffallen ──────────────────────────────
+    var img = PageBlock.make("image")
+    expect(img.missing == ["file", "alt text", "credit", "size"],
+           "bild: ein frischer Bildblock nennt alle vier fehlenden Angaben")
+    expect(img.summary.contains("no alt text") && img.summary.contains("no credit"),
+           "bild: der Mangel steht schon in der eingeklappten Zeile")
+
+    img.fields["src"] = .string("/assets/images/pages/probe/x.jpg")
+    img.fields["alt"] = .string("Was zu sehen ist")
+    img.fields["credit"] = .string("Eigene Aufnahme, CC BY 4.0")
+    img.fields["width"] = .number(1600)
+    img.fields["height"] = .number(900)
+    expect(img.missing.isEmpty, "bild: vollstaendig heisst keine Mangelmeldung")
+    expect(!img.summary.contains("no "), "bild: dann ist die Zeile auch sauber")
+
+    // Leerzeichen sind kein Alt-Text.
+    var blank = img
+    blank.fields["alt"] = .string("   ")
+    expect(blank.missing == ["alt text"],
+           "bild: ein Alt-Text aus Leerzeichen zaehlt nicht als Alt-Text")
+
+    // Die Maße muessen als ganze Zahlen herauskommen, nicht als 1600.0.
+    do {
+        let page = SitePage(id: "probe", path: "data/pages/probe.json", sha: nil,
+                            fields: ["id": .string("probe")],
+                            sections: [PageSection(fields: ["id": .string("a")],
+                                                   blocks: [img])])
+        let out = try page.encoded()
+        expect(out.contains("1600") && !out.contains("1600.0"),
+               "bild: die Breite steht als 1600, nicht als 1600.0")
+        expect(out.contains("CC BY 4.0"), "bild: die Lizenzangabe geht mit hinaus")
+    } catch {
+        expect(false, "bild: die Seite liess sich nicht schreiben (\(error))")
+    }
+
+    return (ok, passed)
 }

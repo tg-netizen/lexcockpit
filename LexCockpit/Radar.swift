@@ -182,7 +182,12 @@ struct RadarView: View {
             }
 
             if !radar.entries.isEmpty {
-                Text("Changes")
+                /* Hier ist die Gesamtzahl vollstaendig bekannt, die
+                   Datei wird ganz gelesen. Dann gibt es keinen Grund, das
+                   Kuerzen zu verschweigen. */
+                Text(radar.entries.count > 40
+                     ? "Changes · showing 40 of \(radar.entries.count)"
+                     : "Changes")
                     .font(.system(size: 18, weight: .bold)).foregroundColor(.textPrimary)
                 VStack(spacing: 8) {
                     ForEach(radar.entries.prefix(40), id: \.uid) { entry in
