@@ -79,8 +79,8 @@ struct PageBlock: Identifiable, Equatable {
     /// JSON. Anything else still shows, still moves, and is written back
     /// exactly as it came in.
     static let editable: [String] = [
-        "lead", "prose", "subhead", "limit", "hint",
-        "next", "counts", "image", "gaps", "sources", "table", "tool"
+        "lead", "prose", "heading", "subhead", "limit", "hint",
+        "list", "next", "counts", "image", "gaps", "sources", "table", "tool"
     ]
 
     var isEditable: Bool { Self.editable.contains(type) }
@@ -113,6 +113,14 @@ struct PageBlock: Identifiable, Equatable {
                  + (fields["href"]?.stringValue ?? "")
         case "counts":
             return (fields["items"]?.stringList ?? []).joined(separator: " · ")
+        case "heading":
+            let lvl = { if case .number(let d) = fields["level"] { return Int(d) }; return 3 }()
+            return "H\(lvl)  " + text
+        case "list":
+            let items = fields["items"]?.stringList ?? []
+            let kind: String = { if case .bool(true) = fields["ordered"] { return "numbered" }
+                                 return "bulleted" }()
+            return "\(items.count) \(kind)  ·  " + items.joined(separator: " · ")
         case "image":
             let src = fields["src"]?.stringValue ?? ""
             var missing: [String] = []
@@ -164,6 +172,8 @@ struct PageBlock: Identifiable, Equatable {
         case "hint":    return "Hint"
         case "next":    return "Forward link"
         case "counts":  return "Count row"
+        case "heading": return "Heading"
+        case "list":    return "List"
         case "image":   return "Image"
         case "gaps":    return "Named gaps"
         case "sources": return "Sources"
@@ -185,6 +195,10 @@ struct PageBlock: Identifiable, Equatable {
         case "next":
             f["label"] = .string(""); f["href"] = .string("/")
         case "counts":
+            f["items"] = .array([])
+        case "heading":
+            f["level"] = .number(3); f["text"] = .string("")
+        case "list":
             f["items"] = .array([])
         case "image":
             f["src"] = .string(""); f["alt"] = .string("")

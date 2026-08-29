@@ -72,6 +72,18 @@ enum BlockRenderer {
             return p + "<p>" + rich(str("text")) + "</p>"
         case "subhead":
             return p + "<p class=\"dd-lead dd-lead--spaced\">" + rich(str("text")) + "</p>"
+        case "heading":
+            let lvl = (number(f["level"]) == "4") ? 4 : 3
+            let hid = (str("id").map { $0.isEmpty ? "" : " id=\"" + esc($0) + "\"" }) ?? ""
+            return p + "<h\(lvl)\(hid)>" + rich(str("text")) + "</h\(lvl)>"
+
+        case "list":
+            let ordered: Bool = { if case .bool(true) = f["ordered"] { return true }; return false }()
+            let lt = ordered ? "ol" : "ul"
+            let lis = list("items").map { p + "  <li>" + rich($0) + "</li>" }
+                .joined(separator: "\n")
+            return p + "<\(lt)>\n" + lis + "\n" + p + "</\(lt)>"
+
         case "limit":
             return p + "<p class=\"ai-limit\">" + rich(str("text")) + "</p>"
         case "hint":
@@ -152,8 +164,10 @@ enum BlockRenderer {
                 " " + (k.hasPrefix("data-") ? k : "data-" + k)
                     + "=\"" + esc(params[k]?.stringValue ?? number(params[k])) + "\""
             }.joined()
-            return p + "<div class=\"" + esc(str("cls") ?? "") + "\" "
-                 + esc(str("attribute")) + attrs + "></div>"
+            let tid = (str("id").map { $0.isEmpty ? "" : " id=\"" + esc($0) + "\"" }) ?? ""
+            let kids = (str("inner").map { $0.isEmpty ? "" : "\n" + $0 + "\n" + p }) ?? ""
+            return p + "<div class=\"" + esc(str("cls") ?? "") + "\"" + tid + " "
+                 + esc(str("attribute")) + attrs + ">" + kids + "</div>"
 
         case "html":
             return str("raw") ?? ""
