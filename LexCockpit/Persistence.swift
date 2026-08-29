@@ -34,6 +34,14 @@ enum BookmarkStore {
         saveMap(map)
     }
 
+    /// Ein Lesezeichen vergessen, etwa wenn der Nutzer wieder ueber
+    /// GitHub arbeiten will.
+    static func forget(_ key: String) {
+        var map = loadMap()
+        map[key] = nil
+        saveMap(map)
+    }
+
     /// Resolve a stored bookmark and begin access. Returns nil (and forgets
     /// the entry) when stale — caller re-prompts only when needed.
     static func resolve(_ key: String) -> URL? {

@@ -22,6 +22,7 @@ import SwiftUI
 
 struct DesignTabView: View {
     @ObservedObject var model: WorkspaceModel
+    let site: SiteProject
     /// Which theme the numbers and swatches are shown for. Not a setting,
     /// a lens: the file always holds both.
     @State private var showDark = false
@@ -94,6 +95,10 @@ struct DesignTabView: View {
                  + "these names rather than repeating their values.")
                 .font(.system(size: 12)).foregroundColor(.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            RepoSourceBar(site: site) {
+                Task { await model.loadDesign(force: true) }
+            }
 
             if let err = model.designSaveError {
                 ErrorCard(title: "Not saved", detail: err, retry: nil)

@@ -86,6 +86,17 @@ struct LayoutTabView: View {
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.textPrimary)
                 Spacer()
+                if let p = page, model.canUndo(p.id) {
+                    Button {
+                        model.undoPage(p.id)
+                    } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain).foregroundColor(.accentNavy)
+                    .keyboardShortcut("z", modifiers: .command)
+                    .help("Take back the last change to this page")
+                }
                 if let p = page, model.pagesDirty.contains(p.id) {
                     if model.pageSaving == p.id {
                         ProgressView().controlSize(.small)
@@ -112,6 +123,10 @@ struct LayoutTabView: View {
                 .font(.system(size: 12))
                 .foregroundColor(.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            RepoSourceBar(site: site) {
+                Task { await model.loadPages(force: true) }
+            }
 
             if let err = model.pageSaveError {
                 ErrorCard(title: "Not saved", detail: err, retry: nil)

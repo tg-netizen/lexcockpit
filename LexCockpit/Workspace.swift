@@ -222,6 +222,19 @@ final class WorkspaceModel: ObservableObject {
     @Published var pageSaving: String?
     @Published var pageSaveError: String?
 
+    /* ── Zurueck ──────────────────────────────────────────────────────
+       Wer unmittelbar in der Seite arbeitet, macht auch unmittelbar
+       Fehler: ein Block landet an der falschen Stelle, ein Absatz ist
+       weg. Ohne einen Weg zurueck ist direktes Anfassen kein Gewinn,
+       sondern ein Risiko. Zwanzig Schritte je Seite, mehr braucht es
+       nicht und weniger waere geizig. */
+    @Published private(set) var pageHistory: [String: [SitePage]] = [:]
+    /// Zaehlt hoch, wenn etwas zurueckgenommen wurde. Die Vorschau haengt
+    /// ihren Neuaufbau daran, denn ein zurueckgenommener Text aendert die
+    /// Struktur nicht und wuerde sonst unsichtbar bleiben.
+    @Published private(set) var pageRevision = 0
+    func canUndo(_ id: String) -> Bool { !(pageHistory[id]?.isEmpty ?? true) }
+
     /* ── Design tokens ────────────────────────────────────────────────
        The custom properties in assets/css/style.css. Everything else in
        that stylesheet refers to them, so changing one changes the whole
@@ -385,29 +398,29 @@ final class WorkspaceModel: ObservableObject {
 
     func loadTools(force: Bool = false) async {
         if !force, case .loaded = toolsState { return }
-        guard let repo = site.repo, !repo.isEmpty else {
+        guard RepoSource.isLocal(site) || !(site.repo ?? "").isEmpty else {
             toolsState = .failed(
-                "This project has no repo configured, so there is nothing to read the instruments out of.",
-                at: Date())
+                "This project has neither a local folder nor a repo, so there is nothing "
+                    + "to read the instruments out of.", at: Date())
             return
         }
         toolsState.beginLoading()
         do {
-            let tree = try await GitHubAPI.tree(repo: repo)
+            let tree = try await RepoSource.list(site: site)
             let scriptPaths = tree.filter {
-                $0.type == "blob" && $0.path.hasPrefix("assets/js/") && $0.path.hasSuffix(".js")
-            }.map(\.path)
+                $0.hasPrefix("assets/js/") && $0.hasSuffix(".js")
+            }
             /* The German mirror under de/ repeats every page, and preview/
                holds unpublished drafts. Counting either would double or
                inflate the register without adding an instrument. */
             let pagePaths = tree.filter {
-                $0.type == "blob" && $0.path.hasSuffix(".html")
-                    && !$0.path.hasPrefix("de/")
-                    && !$0.path.hasPrefix("preview/")
-                    && !$0.path.hasPrefix("scripts/")
-            }.map(\.path)
+                $0.hasSuffix(".html")
+                    && !$0.hasPrefix("de/")
+                    && !$0.hasPrefix("preview/")
+                    && !$0.hasPrefix("scripts/")
+            }
 
-            let scripts = try await Self.fetchAll(repo: repo, paths: scriptPaths)
+            let scripts = try await Self.fetchAll(site: site, paths: scriptPaths)
             var mountToScript: [String: String] = [:]
             for (path, text) in scripts {
                 for attr in Self.mountPoints(in: text) { mountToScript[attr] = path }
@@ -420,7 +433,7 @@ final class WorkspaceModel: ObservableObject {
                 return
             }
 
-            let pages = try await Self.fetchAll(repo: repo, paths: pagePaths)
+            let pages = try await Self.fetchAll(site: site, paths: pagePaths)
             var mountedOn: [String: [String]] = [:]
             var unwiredOn: [String: [String]] = [:]
             for (path, html) in pages {
@@ -464,16 +477,15 @@ final class WorkspaceModel: ObservableObject {
 
        A file that fails is skipped rather than failing the whole scan:
        one unreadable page should cost that page, not the register. */
-    private static func fetchAll(repo: String, paths: [String]) async throws -> [(String, String)] {
+    private static func fetchAll(site: SiteProject, paths: [String]) async throws -> [(String, String)] {
         var out: [(String, String)] = []
         var remaining = paths[...]
         try await withThrowingTaskGroup(of: (String, String)?.self) { group in
             func addNext() {
                 guard let path = remaining.popFirst() else { return }
                 group.addTask {
-                    guard let text = try? await GitHubAPI.file(repo: repo, path: path).decodedText()
-                    else { return nil }
-                    return (path, text)
+                    guard let f = try? await RepoSource.read(path, site: site) else { return nil }
+                    return (path, f.text)
                 }
             }
             for _ in 0..<min(8, paths.count) { addNext() }
@@ -489,26 +501,25 @@ final class WorkspaceModel: ObservableObject {
 
     func loadPages(force: Bool = false) async {
         if !force, case .loaded = pagesState { return }
-        guard let repo = site.repo, !repo.isEmpty else {
+        guard RepoSource.isLocal(site) || !(site.repo ?? "").isEmpty else {
             pagesState = .failed(
-                "This project has no repo configured, so there are no page files to read.",
+                "This project has neither a local folder nor a repo, so there are "
+                    + "no page files to read.",
                 at: Date())
             return
         }
         pagesState.beginLoading()
         do {
-            let tree = try await GitHubAPI.tree(repo: repo)
-            let paths = tree.filter {
-                $0.type == "blob" && $0.path.hasPrefix("data/pages/") && $0.path.hasSuffix(".json")
-            }.map(\.path).sorted()
+            let paths = try await RepoSource.list(site: site).filter {
+                $0.hasPrefix("data/pages/") && $0.hasSuffix(".json")
+            }.sorted()
             var out: [SitePage] = []
             for path in paths {
                 /* One at a time and not in a group: these are few, and a
                    page that fails to parse should name itself rather than
                    vanish into a filtered array. */
-                let file = try await GitHubAPI.file(repo: repo, path: path)
-                guard let text = file.decodedText() else { continue }
-                out.append(try SitePage.parse(path: path, sha: file.sha, json: text))
+                let file = try await RepoSource.read(path, site: site)
+                out.append(try SitePage.parse(path: path, sha: file.sha, json: file.text))
             }
             pagesState = .loaded(out, at: Date())
             pagesDirty.removeAll()
@@ -526,21 +537,22 @@ final class WorkspaceModel: ObservableObject {
     /// change somebody else made in between is refused rather than
     /// overwritten.
     func savePage(_ id: String) async {
-        guard let repo = site.repo, !repo.isEmpty,
-              let idx = pages.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = pages.firstIndex(where: { $0.id == id }) else { return }
         let page = pages[idx]
         pageSaving = id
         pageSaveError = nil
         do {
             let text = try page.encoded()
-            let res = try await GitHubAPI.put(
-                repo: repo, path: page.path,
+            let newSHA = try await RepoSource.write(
+                page.path, text: text, sha: page.sha,
                 message: "Layout: " + page.title + " ueber LexCockpit geaendert",
-                text: text, sha: page.sha)
+                site: site)
             /* The new SHA replaces the old one, so a second save in the
-               same session is not refused as a conflict with itself. */
+               same session is not refused as a conflict with itself.
+               Lokal gibt es keine, dann bleibt die alte stehen und stoert
+               nichts. */
             if var list = pagesState.value {
-                list[idx].sha = res.content?.sha ?? list[idx].sha
+                list[idx].sha = newSHA ?? list[idx].sha
                 pagesState = .loaded(list, at: Date())
             }
             pagesDirty.remove(id)
@@ -551,12 +563,38 @@ final class WorkspaceModel: ObservableObject {
     }
 
     /// Replace one page in the loaded list, keeping everything else.
-    func updatePage(_ page: SitePage) {
+    /// `remember` legt den vorherigen Stand auf den Rueckweg; nur beim
+    /// Zuruecknehmen selbst ist er false, sonst kaeme man nie voran.
+    func updatePage(_ page: SitePage, remember: Bool = true) {
         guard var list = pagesState.value,
               let i = list.firstIndex(where: { $0.id == page.id }) else { return }
+        if remember {
+            var h = pageHistory[page.id] ?? []
+            h.append(list[i])
+            if h.count > 20 { h.removeFirst(h.count - 20) }
+            pageHistory[page.id] = h
+        }
         list[i] = page
         pagesState = .loaded(list, at: pagesState.stamp ?? Date())
         markPageDirty(page.id)
+    }
+
+    /// Einen Schritt zurueck.
+    func undoPage(_ id: String) {
+        guard var h = pageHistory[id], let previous = h.popLast() else { return }
+        pageHistory[id] = h
+        pageRevision += 1
+        updatePage(previous, remember: false)
+    }
+
+    /// Einen neuen Block an eine bestimmte Stelle setzen.
+    func insertBlock(_ type: String, into pageID: String, section si: Int, at bi: Int) {
+        guard var page = pages.first(where: { $0.id == pageID }),
+              page.sections.indices.contains(si) else { return }
+        let clamped = max(0, min(bi, page.sections[si].blocks.count))
+        page.sections[si].blocks.insert(PageBlock.make(type), at: clamped)
+        pageRevision += 1
+        updatePage(page)
     }
 
     // MARK: Images
@@ -612,21 +650,16 @@ final class WorkspaceModel: ObservableObject {
 
     func loadDesign(force: Bool = false) async {
         if !force, case .loaded = designState { return }
-        guard let repo = site.repo, !repo.isEmpty else {
+        guard RepoSource.isLocal(site) || !(site.repo ?? "").isEmpty else {
             designState = .failed(
-                "This project has no repo configured, so the stylesheet cannot be read.",
-                at: Date())
+                "This project has neither a local folder nor a repo, so the stylesheet "
+                    + "cannot be read.", at: Date())
             return
         }
         designState.beginLoading()
         do {
-            let file = try await GitHubAPI.file(repo: repo, path: "assets/css/style.css")
-            guard let css = file.decodedText() else {
-                designState = .failed("style.css came back but could not be read as text.",
-                                      at: Date())
-                return
-            }
-            designState = .loaded(try DesignSheet(css: css, sha: file.sha), at: Date())
+            let file = try await RepoSource.read("assets/css/style.css", site: site)
+            designState = .loaded(try DesignSheet(css: file.text, sha: file.sha), at: Date())
         } catch {
             designState = .failed(error.localizedDescription, at: Date())
         }
@@ -634,21 +667,20 @@ final class WorkspaceModel: ObservableObject {
 
     /// Write the stylesheet back with the edited values substituted in.
     func saveDesign() async {
-        guard let repo = site.repo, !repo.isEmpty, let sheet = design else { return }
-        guard !sheet.changed.isEmpty else { return }
+        guard let sheet = design, !sheet.changed.isEmpty else { return }
         designSaving = true
         designSaveError = nil
         do {
             let names = sheet.changed.map(\.name).sorted().joined(separator: ", ")
-            let res = try await GitHubAPI.put(
-                repo: repo, path: sheet.path,
+            let newSHA = try await RepoSource.write(
+                sheet.path, text: sheet.rendered(), sha: sheet.sha,
                 message: "Design: " + names + " ueber LexCockpit geaendert",
-                text: sheet.rendered(), sha: sheet.sha)
+                site: site)
             /* Re-read from what was just written, so the panel shows the
                new values as the baseline and a second edit is measured
                against them rather than against the old file. */
-            var fresh = try DesignSheet(css: sheet.rendered(), sha: res.content?.sha ?? sheet.sha)
-            fresh.sha = res.content?.sha ?? sheet.sha
+            var fresh = try DesignSheet(css: sheet.rendered(), sha: newSHA ?? sheet.sha)
+            fresh.sha = newSHA ?? sheet.sha
             designState = .loaded(fresh, at: Date())
         } catch {
             designSaveError = error.localizedDescription
@@ -684,23 +716,21 @@ final class WorkspaceModel: ObservableObject {
     /// of dossiers is a filter over it rather than a second scan.
     func loadDossiers(force: Bool = false) async {
         if !force, case .loaded = dossiersState { return }
-        guard let repo = site.repo, !repo.isEmpty else {
+        guard RepoSource.isLocal(site) || !(site.repo ?? "").isEmpty else {
             dossiersState = .failed(
-                "This project has no repo configured, so the dossiers cannot be counted.",
-                at: Date())
+                "This project has neither a local folder nor a repo, so the dossiers "
+                    + "cannot be counted.", at: Date())
             return
         }
         dossiersState.beginLoading()
         do {
-            let tree = try await GitHubAPI.tree(repo: repo)
-            let rows = tree.filter {
-                $0.type == "blob"
-                    && $0.path.hasPrefix("politics/sanctions/")
-                    && $0.path.hasSuffix(".html")
-                    && !$0.path.hasSuffix("/index.html")
-            }.map { item -> SiteDossier in
-                let file = item.path.split(separator: "/").last.map(String.init) ?? item.path
-                return SiteDossier(path: item.path,
+            let rows = try await RepoSource.list(site: site).filter {
+                $0.hasPrefix("politics/sanctions/")
+                    && $0.hasSuffix(".html")
+                    && !$0.hasSuffix("/index.html")
+            }.map { path -> SiteDossier in
+                let file = path.split(separator: "/").last.map(String.init) ?? path
+                return SiteDossier(path: path,
                                    slug: file.replacingOccurrences(of: ".html", with: ""))
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             dossiersState = .loaded(rows, at: Date())
@@ -859,7 +889,7 @@ struct WorkspaceView: View {
         case .wire:     WireTabView(model: model)
         case .content:  ContentTabView(model: model, openDeploys: { model.tab = .deploys })
         case .layout:   LayoutTabView(model: model, site: site)
-        case .design:   DesignTabView(model: model)
+        case .design:   DesignTabView(model: model, site: site)
         case .tools:    ToolsTabView(model: model, site: site)
         case .planner:  CalendarTabView(model: model, openArticle: { entry in
                             model.tab = .content

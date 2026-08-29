@@ -83,7 +83,8 @@ struct LivePreview: NSViewRepresentable {
                 parts.append("\(si):" + types + "|" + sec.heading + "|" + brow)
             }
             let css: String = parent.model.design == nil ? "0" : "1"
-            return parts.joined(separator: ";") + "#" + css
+            let rev: String = String(parent.model.pageRevision)
+            return parts.joined(separator: ";") + "#" + css + "#" + rev
         }
 
         func reload(force: Bool) {
@@ -124,12 +125,21 @@ struct LivePreview: NSViewRepresentable {
                 page.sections[si].heading = BlockRenderer.sanitiseInline(html)
                 parent.model.updatePage(page)
 
+            case "insert":
+                guard let at = d["at"] as? String, let type = d["type"] as? String,
+                      let (si, bi) = Self.parse(at) else { return }
+                parent.model.insertBlock(type, into: page.id, section: si, at: bi)
+
             case "move":
                 guard let from = d["from"] as? String, let to = d["to"] as? String,
-                      let (fs, fb) = Self.parse(from), let (ts, tb) = Self.parse(to),
+                      let (fs, fb) = Self.parse(from), let (ts, tb0) = Self.parse(to),
                       page.sections.indices.contains(fs),
                       page.sections[fs].blocks.indices.contains(fb),
                       page.sections.indices.contains(ts) else { return }
+                /* Unter der unteren Haelfte des Ziels heisst dahinter. Ohne
+                   das kann man einen Block nie ans Ende setzen. */
+                let after = (d["after"] as? Bool) ?? false
+                let tb = after ? tb0 + 1 : tb0
                 let moved = page.sections[fs].blocks.remove(at: fb)
                 /* Innerhalb desselben Abschnitts verschiebt das Entfernen
                    alle folgenden Plaetze um eins nach vorn. */
@@ -229,6 +239,66 @@ struct LivePreview: NSViewRepresentable {
           background: var(--surface); border: 1px solid var(--rule);
           border-radius: 2px; padding: 5px 8px; pointer-events: none;
         }
+
+        /* Der Einfuegepunkt zwischen zwei Bloecken. Er nimmt keinen Platz
+           weg, solange niemand hinschaut: acht Pixel hoch mit negativem
+           Rand, damit der Abstand der Seite unveraendert bleibt. */
+        .lc-ins {
+          position: relative; height: 8px; margin: -4px 0; z-index: 5;
+        }
+        .lc-ins__line {
+          position: absolute; left: 0; right: 0; top: 3px; height: 2px;
+          background: var(--accent); opacity: 0; transition: opacity 120ms;
+        }
+        .lc-ins__btn {
+          position: absolute; left: 50%; top: -8px; transform: translateX(-50%);
+          width: 22px; height: 22px; border-radius: 2px; opacity: 0;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--accent); color: var(--surface);
+          font: 15px/1 system-ui, sans-serif; cursor: pointer;
+          transition: opacity 120ms;
+        }
+        .lc-ins:hover .lc-ins__line, .lc-ins:hover .lc-ins__btn,
+        .lc-ins.open .lc-ins__line, .lc-ins.open .lc-ins__btn { opacity: 1; }
+        .lc-pick {
+          position: absolute; left: 50%; top: 20px; transform: translateX(-50%);
+          display: none; flex-wrap: wrap; gap: 4px; width: 340px; z-index: 20;
+          background: var(--surface); border: 1px solid var(--rule);
+          border-radius: 2px; padding: 8px;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+        }
+        .lc-ins.open .lc-pick { display: flex; }
+        .lc-pick button {
+          font: 11px/1 system-ui, sans-serif; color: var(--ink);
+          background: var(--bg); border: 1px solid var(--rule);
+          border-radius: 2px; padding: 6px 8px; cursor: pointer;
+        }
+        .lc-pick button:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* Die Einfuegelinie beim Ziehen. Sie sagt, wo der Block landet,
+           statt nur zu zeigen, worueber die Maus schwebt. */
+        .lc-line-top    { box-shadow: 0 -3px 0 -1px var(--accent); }
+        .lc-line-bottom { box-shadow: 0  3px 0 -1px var(--accent); }
+
+        /* Die Textleiste. Erscheint nur bei einer Auswahl. */
+        .lc-fmt {
+          position: absolute; z-index: 40; display: none; gap: 2px;
+          background: var(--surface); border: 1px solid var(--rule);
+          border-radius: 2px; padding: 3px; align-items: center;
+          box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+        }
+        .lc-fmt.on { display: flex; }
+        .lc-fmt button {
+          font: 12px/1 system-ui, sans-serif; color: var(--ink);
+          background: transparent; border: 0; padding: 5px 8px;
+          cursor: pointer; border-radius: 2px; min-width: 26px;
+        }
+        .lc-fmt button:hover { background: var(--bg); }
+        .lc-fmt input {
+          font: 11px/1 system-ui, sans-serif; width: 190px; padding: 5px 6px;
+          border: 1px solid var(--rule); border-radius: 2px;
+          background: var(--bg); color: var(--ink);
+        }
         """
 
         static let editorJS = """
@@ -239,8 +309,9 @@ struct LivePreview: NSViewRepresentable {
 
           var hint = document.createElement('div');
           hint.className = 'lc-hint';
-          hint.textContent = 'Click text to write. Drag the handle to move. '
-                           + blocks.length + ' blocks.';
+          hint.textContent = 'Click text to write \\u00b7 drag the handle to move \\u00b7 '
+                           + 'the plus between blocks adds one \\u00b7 '
+                           + '\\u2318Z undoes \\u00b7 ' + blocks.length + ' blocks';
           document.body.appendChild(hint);
 
           function typeOf(el) {
@@ -302,19 +373,143 @@ struct LivePreview: NSViewRepresentable {
               dragging = null;
             });
 
+            /* Ober- oder unterhalb: die Linie sagt, wo der Block landet,
+               statt nur zu zeigen, worueber die Maus schwebt. Ohne das
+               kaeme man nie ans Ende eines Abschnitts. */
             el.addEventListener('dragover', function (e) {
               if (!dragging || dragging === el) return;
               e.preventDefault();
-              blocks.forEach(function (b) { b.classList.remove('lc-drop'); });
-              el.classList.add('lc-drop');
+              blocks.forEach(function (b) {
+                b.classList.remove('lc-line-top', 'lc-line-bottom');
+              });
+              var r = el.getBoundingClientRect();
+              el.dataset.after = (e.clientY > r.top + r.height / 2) ? '1' : '0';
+              el.classList.add(el.dataset.after === '1' ? 'lc-line-bottom' : 'lc-line-top');
             });
             el.addEventListener('drop', function (e) {
               if (!dragging || dragging === el) return;
               e.preventDefault();
               send({ kind: 'move',
                      from: dragging.getAttribute('data-blk'),
-                     to: el.getAttribute('data-blk') });
+                     to: el.getAttribute('data-blk'),
+                     after: el.dataset.after === '1' });
             });
+          });
+
+          /* ── Einfuegepunkte zwischen den Bloecken ────────────────────
+             Die Geste, an der man einen Seiteneditor erkennt: zwischen
+             zwei Bloecke fahren, ein Plus erscheint, und der neue Block
+             landet genau dort und nicht am Ende einer Liste. */
+          var TYPES = [
+            ['prose', 'Paragraph'], ['lead', 'Lead'], ['heading', 'Heading'],
+            ['subhead', 'Sub heading'], ['list', 'List'], ['image', 'Image'],
+            ['next', 'Forward link'], ['counts', 'Count row'],
+            ['gaps', 'Named gaps'], ['sources', 'Sources'],
+            ['limit', 'Limit note'], ['hint', 'Hint'],
+            ['table', 'Table'], ['tool', 'Instrument']
+          ];
+
+          function insertPoint(sec, index) {
+            var wrap = document.createElement('div');
+            wrap.className = 'lc-ins';
+            var line = document.createElement('div');
+            line.className = 'lc-ins__line';
+            var btn = document.createElement('div');
+            btn.className = 'lc-ins__btn';
+            btn.textContent = '+';
+            btn.title = 'Add a block here';
+            var pick = document.createElement('div');
+            pick.className = 'lc-pick';
+            TYPES.forEach(function (t) {
+              var b = document.createElement('button');
+              b.textContent = t[1];
+              b.addEventListener('click', function (e) {
+                e.stopPropagation();
+                send({ kind: 'insert', at: sec + '.' + index, type: t[0] });
+              });
+              pick.appendChild(b);
+            });
+            btn.addEventListener('click', function (e) {
+              e.stopPropagation();
+              var was = wrap.classList.contains('open');
+              [].slice.call(document.querySelectorAll('.lc-ins'))
+                .forEach(function (x) { x.classList.remove('open'); });
+              if (!was) wrap.classList.add('open');
+            });
+            wrap.appendChild(line); wrap.appendChild(btn); wrap.appendChild(pick);
+            return wrap;
+          }
+
+          [].slice.call(document.querySelectorAll('[data-sec]')).forEach(function (sec) {
+            var si = sec.getAttribute('data-sec');
+            var kids = [].slice.call(sec.querySelectorAll(':scope > [data-blk]'));
+            kids.forEach(function (k, i) {
+              sec.insertBefore(insertPoint(si, i), k);
+            });
+            sec.appendChild(insertPoint(si, kids.length));
+          });
+
+          document.addEventListener('click', function (e) {
+            if (e.target.closest('.lc-ins')) return;
+            [].slice.call(document.querySelectorAll('.lc-ins'))
+              .forEach(function (x) { x.classList.remove('open'); });
+          });
+
+          /* ── Die Textleiste ─────────────────────────────────────────
+             Fett, kursiv, Link. Mehr nicht: alles darueber hinaus waere
+             Gestaltung im Text, und die gehoert ins Stylesheet, nicht in
+             einen Absatz. */
+          var fmt = document.createElement('div');
+          fmt.className = 'lc-fmt';
+          function fbtn(label, title, fn) {
+            var b = document.createElement('button');
+            b.innerHTML = label; b.title = title;
+            b.addEventListener('mousedown', function (e) { e.preventDefault(); });
+            b.addEventListener('click', function (e) { e.preventDefault(); fn(); });
+            return b;
+          }
+          var linkInput = document.createElement('input');
+          linkInput.type = 'text';
+          linkInput.placeholder = '/pfad oder https://…';
+          linkInput.style.display = 'none';
+          fmt.appendChild(fbtn('<b>B</b>', 'Bold', function () {
+            document.execCommand('bold');
+          }));
+          fmt.appendChild(fbtn('<i>I</i>', 'Italic', function () {
+            document.execCommand('italic');
+          }));
+          fmt.appendChild(fbtn('\\u{1F517}', 'Link', function () {
+            linkInput.style.display = linkInput.style.display === 'none' ? 'block' : 'none';
+            if (linkInput.style.display === 'block') linkInput.focus();
+          }));
+          fmt.appendChild(fbtn('\\u2715', 'Remove link', function () {
+            document.execCommand('unlink');
+          }));
+          fmt.appendChild(linkInput);
+          linkInput.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            if (savedRange) {
+              var sel = window.getSelection();
+              sel.removeAllRanges(); sel.addRange(savedRange);
+            }
+            document.execCommand('createLink', false, linkInput.value);
+            linkInput.value = ''; linkInput.style.display = 'none';
+          });
+          document.body.appendChild(fmt);
+
+          var savedRange = null;
+          document.addEventListener('selectionchange', function () {
+            var sel = window.getSelection();
+            var host = sel.anchorNode && sel.anchorNode.parentElement
+                     ? sel.anchorNode.parentElement.closest('[contenteditable="true"]')
+                     : null;
+            if (!host || sel.isCollapsed) { fmt.classList.remove('on'); return; }
+            savedRange = sel.getRangeAt(0).cloneRange();
+            var r = sel.getRangeAt(0).getBoundingClientRect();
+            fmt.style.left = Math.max(8, r.left + window.scrollX) + 'px';
+            fmt.style.top = (r.top + window.scrollY - 40) + 'px';
+            fmt.classList.add('on');
           });
 
           /* Ueberschriften der Abschnitte sind auch Text. */

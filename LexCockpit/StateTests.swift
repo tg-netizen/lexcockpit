@@ -728,5 +728,48 @@ func runStateSelfTests() -> (ok: Bool, passed: Int) {
         expect(false, "anfassen: die Probe liess sich nicht lesen (\(error))")
     }
 
+    // ── Die Quelle: Ordner auf diesem Mac oder GitHub ──────────────────
+    // Der Fehler dahinter war real: die App las ausschliesslich ueber die
+    // GitHub-API, also existierte alles Ungepushte fuer sie nicht. Wer
+    // eine Seite umstellte und sie im Layout-Bereich suchte, fand nichts
+    // und hielt den Bereich fuer kaputt.
+    let noRepo = SiteProject(id: "leer", name: "Leer", url: nil, cms_url: nil,
+                             repo: nil, default_branch: nil,
+                             netlify_site_id: nil, content_paths: nil)
+    expect(!RepoSource.isLocal(noRepo),
+           "quelle: ohne Lesezeichen ist ein Projekt nicht lokal")
+    expect(RepoSource.label(for: noRepo) == "github",
+           "quelle: ohne beides heisst die Herkunft ehrlich github")
+    let withRepo = SiteProject(id: "x", name: "X", url: nil, cms_url: nil,
+                               repo: "a/b", default_branch: nil,
+                               netlify_site_id: nil, content_paths: nil)
+    expect(RepoSource.label(for: withRepo) == "a/b",
+           "quelle: sonst nennt sie das Repo")
+    expect(RepoSource.folderKey("x") == "repo-folder-x",
+           "quelle: der Schluessel haengt am Projekt, nicht global")
+
+    // ── Zuruecknehmen ──────────────────────────────────────────────────
+    // Wer unmittelbar in der Seite arbeitet, macht auch unmittelbar
+    // Fehler. Ohne Weg zurueck ist direktes Anfassen ein Risiko.
+    do {
+        let probe = """
+        { "id":"u","target":"x.html","sections":[
+          { "id":"a","blocks":[ {"type":"prose","text":"eins"},
+                                {"type":"prose","text":"zwei"} ] } ] }
+        """
+        let p0 = try SitePage.parse(path: "data/pages/u.json", sha: nil, json: probe)
+        var p1 = p0
+        p1.sections[0].blocks.swapAt(0, 1)
+        expect(p1.sections[0].blocks[0].text == "zwei",
+               "zurueck: die Aenderung greift zuerst")
+        /* Der Verlauf haelt den Stand DAVOR, nicht danach. Wer das
+           verwechselt, nimmt beim ersten Druck nichts zurueck. */
+        let history = [p0]
+        expect(history.last?.sections[0].blocks[0].text == "eins",
+               "zurueck: im Verlauf liegt der Stand vor der Aenderung")
+    } catch {
+        expect(false, "zurueck: die Probe liess sich nicht lesen (\(error))")
+    }
+
     return (ok, passed)
 }
