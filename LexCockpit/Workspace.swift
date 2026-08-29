@@ -233,6 +233,13 @@ final class WorkspaceModel: ObservableObject {
     @Published var designSaving = false
     @Published var designSaveError: String?
 
+    /* ── Bilder ───────────────────────────────────────────────────────
+       Ein Bild, das in eine Seite soll, muss dreierlei tun: kleiner
+       werden, ins Repo kommen und seine Maße mitbringen. Die ersten
+       beiden konnte die App schon fuer Artikel, das dritte hat gefehlt. */
+    @Published var imageUploading = false
+    @Published var imageUploadError: String?
+
     // Content (browser + editor) — lives here so edits survive tab switches
     @Published var contentState: LoadState<[ContentEntry]> = .never
     var contentEntries: [ContentEntry] { contentState.value ?? [] }
@@ -550,6 +557,55 @@ final class WorkspaceModel: ObservableObject {
         list[i] = page
         pagesState = .loaded(list, at: pagesState.stamp ?? Date())
         markPageDirty(page.id)
+    }
+
+    // MARK: Images
+
+    struct UploadedImage {
+        let src: String
+        let width: Int
+        let height: Int
+        /// Wie viel kleiner die Datei nach dem Aufbereiten ist, damit die
+        /// Zahl auf dem Schirm eine gemessene ist und keine Behauptung.
+        let originalBytes: Int
+        let finalBytes: Int
+    }
+
+    /// Ein Bild aufbereiten und ins Repo legen. Der Ordner haengt am Ziel,
+    /// nicht am Zufall: Bilder einer Seite liegen unter dieser Seite.
+    func uploadImage(from url: URL, folder: String) async -> UploadedImage? {
+        guard let repo = site.repo, !repo.isEmpty else {
+            imageUploadError = "This project has no repo configured, so there is nowhere to put the file."
+            return nil
+        }
+        imageUploading = true
+        imageUploadError = nil
+        defer { imageUploading = false }
+
+        /* Der Nutzer hat die Datei im Dialog ausgewaehlt, also darf sie
+           gelesen werden; die Sandbox will trotzdem, dass man es sagt. */
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard let raw = try? Data(contentsOf: url) else {
+            imageUploadError = "The file could not be read."
+            return nil
+        }
+        guard let prepared = ImagePipeline.prepare(data: raw,
+                                                   suggestedName: url.lastPathComponent) else {
+            imageUploadError = "Not an image this app can re-encode. "
+                + "JPEG, PNG, HEIC and TIFF work; PDF and SVG do not."
+            return nil
+        }
+        do {
+            let path = try await ImagePipeline.upload(repo: repo, folder: folder,
+                                                      prepared: prepared)
+            return UploadedImage(src: path, width: prepared.width, height: prepared.height,
+                                 originalBytes: raw.count, finalBytes: prepared.data.count)
+        } catch {
+            imageUploadError = error.localizedDescription
+            return nil
+        }
     }
 
     // MARK: Design tokens

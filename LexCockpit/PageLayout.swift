@@ -85,6 +85,23 @@ struct PageBlock: Identifiable, Equatable {
 
     var isEditable: Bool { Self.editable.contains(type) }
 
+    /// Was diesem Block fehlt, bevor er auf die Website darf. Leer heisst
+    /// vollstaendig. Nur Bilder haben heute Pflichtangaben, und die haben
+    /// sie aus gutem Grund: ohne Alt-Text ist das Bild fuer einen Teil der
+    /// Leser nicht vorhanden, ohne Credit hat es hier nichts verloren.
+    var missing: [String] {
+        guard type == "image" else { return [] }
+        var out: [String] = []
+        func empty(_ k: String) -> Bool {
+            (fields[k]?.stringValue ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        if empty("src")    { out.append("file") }
+        if empty("alt")    { out.append("alt text") }
+        if empty("credit") { out.append("credit") }
+        if fields["width"] == nil || fields["height"] == nil { out.append("size") }
+        return out
+    }
+
     /// The line shown in the list. Never empty: a block with no text still
     /// has to be findable, or moving it is guesswork.
     var summary: String {
@@ -97,7 +114,21 @@ struct PageBlock: Identifiable, Equatable {
         case "counts":
             return (fields["items"]?.stringList ?? []).joined(separator: " · ")
         case "image":
-            return fields["src"]?.stringValue ?? "(no file)"
+            let src = fields["src"]?.stringValue ?? ""
+            var missing: [String] = []
+            if (fields["alt"]?.stringValue ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+                missing.append("no alt text")
+            }
+            if (fields["credit"]?.stringValue ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+                missing.append("no credit")
+            }
+            if fields["width"] == nil || fields["height"] == nil {
+                missing.append("no size")
+            }
+            /* Was fehlt, steht in der eingeklappten Zeile. Ein Mangel, den
+               man erst beim Aufklappen sieht, ist keiner, der auffaellt. */
+            return (src.isEmpty ? "(no file)" : src)
+                 + (missing.isEmpty ? "" : "  ·  " + missing.joined(separator: ", "))
         case "gaps":
             let n = (fields["items"]?.arrayValue ?? []).count
             return (fields["heading"]?.stringValue ?? "") + "  (\(n))"

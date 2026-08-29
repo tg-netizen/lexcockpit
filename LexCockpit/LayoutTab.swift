@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /*  LayoutTab.swift — moving the website around without touching HTML
  *  ═══════════════════════════════════════════════════════════════════
@@ -253,23 +255,8 @@ struct LayoutTabView: View {
             case "subheadUnused":
                 EmptyView()
             case "image":
-                field("File in the repo", block.fields["src"]?.stringValue ?? "") { v in
-                    write(p, si, bi) { $0.fields["src"] = .string(v) }
-                }
-                field("Alt text, what the image shows",
-                      block.fields["alt"]?.stringValue ?? "") { v in
-                    write(p, si, bi) { $0.fields["alt"] = .string(v) }
-                }
-                field("Caption", block.fields["caption"]?.stringValue ?? "") { v in
-                    write(p, si, bi) { $0.fields["caption"] = .string(v) }
-                }
-                field("Credit and licence", block.fields["credit"]?.stringValue ?? "") { v in
-                    write(p, si, bi) { $0.fields["credit"] = .string(v) }
-                }
-                Text("An image without alt text is not there for part of your readers, and "
-                     + "without a credit line this desk cannot show it at all.")
-                    .font(.system(size: 10)).foregroundColor(.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                ImageBlockEditor(model: model, page: p, si: si, bi: bi, block: block,
+                                 site: site)
             case "counts":
                 lines("One per line", block.fields["items"]?.stringList ?? []) { v in
                     write(p, si, bi) { $0.fields["items"] = .array(v.map { .string($0) }) }
@@ -432,5 +419,176 @@ struct LayoutTabView: View {
         guard j >= 0, j < page.sections[si].blocks.count else { return }
         page.sections[si].blocks.swapAt(i, j)
         model.updatePage(page)
+    }
+}
+
+
+/*  Das Bild in einem Block
+ *  ═══════════════════════════════════════════════════════════════════
+ *  Eine Datei aussuchen oder hineinziehen, und die App macht den Rest:
+ *  verkleinern auf hoechstens 2000 Pixel Breite, neu kodieren unter 500
+ *  Kilobyte, ins Repo legen, Pfad und Maße in den Block schreiben.
+ *
+ *  Die Maße sind der Grund, warum das nicht nur ein Textfeld sein kann.
+ *  Ein img ohne width und height laesst die Seite springen, sobald das
+ *  Bild nachlaedt, und zwar genau in dem Moment, in dem jemand zu lesen
+ *  angefangen hat. Von Hand eingetippt waeren sie frueher oder spaeter
+ *  falsch; gemessen sind sie es nie.
+ *
+ *  Alt-Text und Credit werden verlangt, nicht empfohlen. Ein Bild ohne
+ *  Alt-Text existiert fuer einen Teil der Leser nicht, und ein Bild ohne
+ *  Herkunft hat auf diesem Schreibtisch nichts verloren. Beides steht als
+ *  Befund am Block, solange es fehlt.
+ */
+private struct ImageBlockEditor: View {
+    @ObservedObject var model: WorkspaceModel
+    let page: SitePage
+    let si: Int
+    let bi: Int
+    let block: PageBlock
+    let site: SiteProject
+    @State private var note: String?
+
+    private var src: String { block.fields["src"]?.stringValue ?? "" }
+    private var alt: String { block.fields["alt"]?.stringValue ?? "" }
+    private var credit: String { block.fields["credit"]?.stringValue ?? "" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            dropZone
+
+            if let err = model.imageUploadError {
+                Text(err)
+                    .font(.system(size: 11)).foregroundColor(.statusRed)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let note {
+                Text(note)
+                    .font(.system(size: 10)).foregroundColor(.textSecondary)
+            }
+
+            field("File in the repo", src) { set("src", $0) }
+            HStack(spacing: 10) {
+                field("Width", block.fields["width"].map { numberText($0) } ?? "") {
+                    set("width", $0)
+                }
+                field("Height", block.fields["height"].map { numberText($0) } ?? "") {
+                    set("height", $0)
+                }
+            }
+            field("Alt text, what the image shows", alt) { set("alt", $0) }
+            field("Caption", block.fields["caption"]?.stringValue ?? "") { set("caption", $0) }
+            field("Credit and licence", credit) { set("credit", $0) }
+
+            if alt.trimmingCharacters(in: .whitespaces).isEmpty {
+                requirement("No alt text. The image is not there at all for a reader using "
+                            + "a screen reader, and the page will not say why.")
+            }
+            if credit.trimmingCharacters(in: .whitespaces).isEmpty {
+                requirement("No credit line. Every image on this site carries where it came "
+                            + "from and under what licence.")
+            }
+        }
+    }
+
+    private var dropZone: some View {
+        HStack(spacing: 12) {
+            if model.imageUploading {
+                ProgressView().controlSize(.small)
+                Text("Preparing and uploading").font(.system(size: 12))
+                    .foregroundColor(.textSecondary)
+            } else {
+                Button("Choose an image…") { pick() }
+                    .buttonStyle(.bordered)
+                Text("or drop one here")
+                    .font(.system(size: 11)).foregroundColor(.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 2).fill(Color.bgPage))
+        .overlay(RoundedRectangle(cornerRadius: 2)
+            .stroke(Color.cardBorder, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .onDrop(of: ["public.file-url"], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in await accept(url) }
+            }
+            return true
+        }
+    }
+
+    private func requirement(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10)).foregroundColor(.statusAmber)
+            Text(text)
+                .font(.system(size: 10)).foregroundColor(.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Use this image"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await accept(url) }
+    }
+
+    @MainActor private func accept(_ url: URL) async {
+        note = nil
+        guard let up = await model.uploadImage(from: url,
+                                               folder: "pages/" + page.id) else { return }
+        var b = block
+        b.fields["src"] = .string(up.src)
+        b.fields["width"] = .number(Double(up.width))
+        b.fields["height"] = .number(Double(up.height))
+        var pg = page
+        pg.sections[si].blocks[bi] = b
+        model.updatePage(pg)
+        let before = up.originalBytes / 1024
+        let after = up.finalBytes / 1024
+        note = "\(up.width) by \(up.height) pixels, \(before) KB became \(after) KB. "
+             + "Not saved yet: the page file goes back with Save."
+    }
+
+    private func set(_ key: String, _ value: String) {
+        var b = block
+        if key == "width" || key == "height" {
+            if let n = Double(value.trimmingCharacters(in: .whitespaces)) {
+                b.fields[key] = .number(n)
+            } else if value.isEmpty {
+                b.fields.removeValue(forKey: key)
+            } else {
+                return   // Buchstaben in einem Maß werden nicht uebernommen.
+            }
+        } else {
+            b.fields[key] = .string(value)
+        }
+        var pg = page
+        pg.sections[si].blocks[bi] = b
+        model.updatePage(pg)
+    }
+
+    private func numberText(_ v: JSONValue) -> String {
+        if case .number(let d) = v { return String(Int(d)) }
+        return v.stringValue ?? ""
+    }
+
+    private func field(_ label: String, _ value: String,
+                       _ set: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.3)
+                .foregroundColor(.textSecondary)
+            TextField("", text: Binding(get: { value }, set: set))
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+        }
     }
 }

@@ -574,5 +574,40 @@ func runStateSelfTests() -> Bool {
         expect(false, "design: die Probe-CSS liess sich nicht lesen (\(error))")
     }
 
+    // ── Bilder: was fehlt, muss auffallen ──────────────────────────────
+    var img = PageBlock.make("image")
+    expect(img.missing == ["file", "alt text", "credit", "size"],
+           "bild: ein frischer Bildblock nennt alle vier fehlenden Angaben")
+    expect(img.summary.contains("no alt text") && img.summary.contains("no credit"),
+           "bild: der Mangel steht schon in der eingeklappten Zeile")
+
+    img.fields["src"] = .string("/assets/images/pages/probe/x.jpg")
+    img.fields["alt"] = .string("Was zu sehen ist")
+    img.fields["credit"] = .string("Eigene Aufnahme, CC BY 4.0")
+    img.fields["width"] = .number(1600)
+    img.fields["height"] = .number(900)
+    expect(img.missing.isEmpty, "bild: vollstaendig heisst keine Mangelmeldung")
+    expect(!img.summary.contains("no "), "bild: dann ist die Zeile auch sauber")
+
+    // Leerzeichen sind kein Alt-Text.
+    var blank = img
+    blank.fields["alt"] = .string("   ")
+    expect(blank.missing == ["alt text"],
+           "bild: ein Alt-Text aus Leerzeichen zaehlt nicht als Alt-Text")
+
+    // Die Maße muessen als ganze Zahlen herauskommen, nicht als 1600.0.
+    do {
+        let page = SitePage(id: "probe", path: "data/pages/probe.json", sha: nil,
+                            fields: ["id": .string("probe")],
+                            sections: [PageSection(fields: ["id": .string("a")],
+                                                   blocks: [img])])
+        let out = try page.encoded()
+        expect(out.contains("1600") && !out.contains("1600.0"),
+               "bild: die Breite steht als 1600, nicht als 1600.0")
+        expect(out.contains("CC BY 4.0"), "bild: die Lizenzangabe geht mit hinaus")
+    } catch {
+        expect(false, "bild: die Seite liess sich nicht schreiben (\(error))")
+    }
+
     return ok
 }
