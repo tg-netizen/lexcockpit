@@ -416,5 +416,71 @@ func runStateSelfTests() -> Bool {
     expect(SiteTool.readableName(for: "data-brand-new-thing") == "Brand new thing",
            "tools: an unknown one is derived and looks underived")
 
+    // ── Der Layout-Editor darf nichts verlieren ────────────────────────
+    // Das ist die Zusage, auf der alles andere steht: eine Seitendatei
+    // geht durch den Editor und kommt vollstaendig wieder heraus, auch
+    // die Felder und Blocktypen, die dieser Build nie gesehen hat.
+    let pageJSON = """
+    {
+      "id": "probe",
+      "title": "Probe",
+      "target": "x/index.html",
+      "_note": "ein Feld, das die App nicht kennt",
+      "zukunft": { "tief": [1, 2, 3], "an": true },
+      "sections": [
+        {
+          "id": "a",
+          "heading": "Erster",
+          "eyebrow": ["Auge"],
+          "unbekannt": "bleibt",
+          "blocks": [
+            { "type": "lead", "text": "eins" },
+            { "type": "kachelgitter", "spalten": 3, "eintraege": ["x", "y"] },
+            { "type": "prose", "text": "zwei" }
+          ]
+        }
+      ]
+    }
+    """
+    do {
+        let page = try SitePage.parse(path: "data/pages/probe.json", sha: "abc", json: pageJSON)
+        expect(page.id == "probe", "layout: die Kennung kommt aus dem Dateinamen")
+        expect(page.sections.count == 1 && page.sections[0].blocks.count == 3,
+               "layout: Abschnitte und Bloecke werden gelesen")
+        expect(page.sections[0].blocks[1].type == "kachelgitter",
+               "layout: ein unbekannter Blocktyp wird gelesen, nicht verworfen")
+        expect(!page.sections[0].blocks[1].isEditable,
+               "layout: und er meldet sich als nicht bearbeitbar")
+
+        let out = try page.encoded()
+        for needle in ["_note", "zukunft", "unbekannt", "kachelgitter", "eintraege", "spalten"] {
+            expect(out.contains(needle),
+                   "layout: \(needle) ueberlebt das Schreiben")
+        }
+        expect(out.contains("\"spalten\" : 3") || out.contains("\"spalten\": 3"),
+               "layout: eine ganze Zahl bleibt eine ganze Zahl, kein 3.0")
+
+        // Verschieben aendert die Reihenfolge und sonst nichts.
+        var moved = page
+        moved.sections[0].blocks.swapAt(0, 2)
+        expect(moved.sections[0].blocks[0].text == "zwei"
+               && moved.sections[0].blocks[2].text == "eins",
+               "layout: Verschieben vertauscht genau zwei Bloecke")
+        let out2 = try moved.encoded()
+        expect(out2.contains("kachelgitter"),
+               "layout: der unbekannte Block ueberlebt auch das Verschieben")
+        expect(out2.count == out.count,
+               "layout: Verschieben aendert die Groesse der Datei nicht")
+
+        // Ein frischer Block traegt die Felder seines Typs.
+        let img = PageBlock.make("image")
+        expect(img.type == "image" && img.fields["alt"] != nil,
+               "layout: ein neues Bild bringt sein alt-Feld mit")
+        expect(PageBlock.make("gaps").fields["items"] != nil,
+               "layout: neue Luecken bringen ihre Liste mit")
+    } catch {
+        expect(false, "layout: die Probedatei liess sich nicht lesen (\(error))")
+    }
+
     return ok
 }

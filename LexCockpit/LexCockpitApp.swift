@@ -324,7 +324,14 @@ struct ContentView: View {
                 }
             }
         }
-        .onAppear { NSApp.windows.first?.setFrameAutosaveName("LexCockpitMain") }
+        .onAppear {
+            /* Remember the size and place, but never the fact that there
+               were no windows. isRestorable off, autosave on. */
+            if let w = NSApp.windows.first(where: { $0.canBecomeMain }) {
+                w.setFrameAutosaveName("LexCockpitMain")
+                w.isRestorable = false
+            }
+        }
         .sheet(isPresented: $showSwitcher) {
             QuickSwitcherView(store: store, navigate: { sel in selection = sel },
                               openSection: { site, tab in go(site, tab) },

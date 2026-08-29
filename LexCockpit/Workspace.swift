@@ -28,8 +28,8 @@ import UniformTypeIdentifiers
    from a general idea of work rather than from this site, which is why
    nothing in them could be found by someone who knows the site. */
 enum WorkspaceTab: String, CaseIterable, Identifiable {
-    case overview, tools, radar, analytics
-    case content, planner
+    case overview, layout, tools, radar, analytics
+    case wire, content, planner
     case tracker, pipeline, trilogue, enforcement
     case sanctions
     case defence
@@ -40,9 +40,11 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .overview:    return "Overview"
+        case .layout:      return "Layout"
         case .tools:       return "Instruments"
         case .radar:       return "Radar"
         case .analytics:   return "Analytics"
+        case .wire:        return "Scanner"
         case .content:     return "Articles"
         case .planner:     return "Calendar"
         case .tracker:     return "Deadlines"
@@ -64,9 +66,11 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .overview:    return "rectangle.3.group"
+        case .layout:      return "square.stack.3d.up"
         case .tools:       return "wrench.and.screwdriver"
         case .radar:       return "dot.radiowaves.left.and.right"
         case .analytics:   return "chart.bar"
+        case .wire:        return "antenna.radiowaves.left.and.right"
         case .content:     return "doc.text"
         case .planner:     return "calendar.day.timeline.left"
         case .tracker:     return "calendar.badge.clock"
@@ -129,8 +133,8 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 
         var members: [WorkspaceTab] {
             switch self {
-            case .project:    return [.overview, .tools, .radar, .analytics]
-            case .news:       return [.content, .planner]
+            case .project:    return [.overview, .layout, .tools, .radar, .analytics]
+            case .news:       return [.wire, .content, .planner]
             case .regulation: return [.tracker, .pipeline, .trilogue, .enforcement]
             case .sanctions:  return [.sanctions]
             case .defence:    return [.defence]
@@ -202,6 +206,19 @@ final class WorkspaceModel: ObservableObject {
     var dossiers: [SiteDossier] { dossiersState.value ?? [] }
     var dossiersError: String? { dossiersState.error }
     var dossiersLoading: Bool { dossiersState.isLoading }
+
+    /* ── Page layouts ─────────────────────────────────────────────────
+       The bodies of the pages that have been converted to blocks. This is
+       what makes the site's layout editable from here instead of by hand
+       in HTML. */
+    @Published var pagesState: LoadState<[SitePage]> = .never
+    var pages: [SitePage] { pagesState.value ?? [] }
+    var pagesError: String? { pagesState.error }
+    var pagesLoading: Bool { pagesState.isLoading }
+    /// Pages edited since they were read, by id. Saving clears one.
+    @Published var pagesDirty: Set<String> = []
+    @Published var pageSaving: String?
+    @Published var pageSaveError: String?
 
     // Content (browser + editor) — lives here so edits survive tab switches
     @Published var contentState: LoadState<[ContentEntry]> = .never
@@ -448,6 +465,80 @@ final class WorkspaceModel: ObservableObject {
         return out
     }
 
+    // MARK: Page layouts
+
+    func loadPages(force: Bool = false) async {
+        if !force, case .loaded = pagesState { return }
+        guard let repo = site.repo, !repo.isEmpty else {
+            pagesState = .failed(
+                "This project has no repo configured, so there are no page files to read.",
+                at: Date())
+            return
+        }
+        pagesState.beginLoading()
+        do {
+            let tree = try await GitHubAPI.tree(repo: repo)
+            let paths = tree.filter {
+                $0.type == "blob" && $0.path.hasPrefix("data/pages/") && $0.path.hasSuffix(".json")
+            }.map(\.path).sorted()
+            var out: [SitePage] = []
+            for path in paths {
+                /* One at a time and not in a group: these are few, and a
+                   page that fails to parse should name itself rather than
+                   vanish into a filtered array. */
+                let file = try await GitHubAPI.file(repo: repo, path: path)
+                guard let text = file.decodedText() else { continue }
+                out.append(try SitePage.parse(path: path, sha: file.sha, json: text))
+            }
+            pagesState = .loaded(out, at: Date())
+            pagesDirty.removeAll()
+        } catch {
+            pagesState = .failed(error.localizedDescription, at: Date())
+        }
+    }
+
+    func markPageDirty(_ id: String) {
+        pagesDirty.insert(id)
+        pageSaveError = nil
+    }
+
+    /// Write one page back. The SHA read with the file goes along, so a
+    /// change somebody else made in between is refused rather than
+    /// overwritten.
+    func savePage(_ id: String) async {
+        guard let repo = site.repo, !repo.isEmpty,
+              let idx = pages.firstIndex(where: { $0.id == id }) else { return }
+        let page = pages[idx]
+        pageSaving = id
+        pageSaveError = nil
+        do {
+            let text = try page.encoded()
+            let res = try await GitHubAPI.put(
+                repo: repo, path: page.path,
+                message: "Layout: " + page.title + " ueber LexCockpit geaendert",
+                text: text, sha: page.sha)
+            /* The new SHA replaces the old one, so a second save in the
+               same session is not refused as a conflict with itself. */
+            if var list = pagesState.value {
+                list[idx].sha = res.content?.sha ?? list[idx].sha
+                pagesState = .loaded(list, at: Date())
+            }
+            pagesDirty.remove(id)
+        } catch {
+            pageSaveError = error.localizedDescription
+        }
+        pageSaving = nil
+    }
+
+    /// Replace one page in the loaded list, keeping everything else.
+    func updatePage(_ page: SitePage) {
+        guard var list = pagesState.value,
+              let i = list.firstIndex(where: { $0.id == page.id }) else { return }
+        list[i] = page
+        pagesState = .loaded(list, at: pagesState.stamp ?? Date())
+        markPageDirty(page.id)
+    }
+
     // MARK: Sanctions dossiers
 
     /// One request: the repo tree already lists every file, so the stock
@@ -626,7 +717,9 @@ struct WorkspaceView: View {
             model.tab = .content
             Task { await model.openEntry(entry) }
         })
+        case .wire:     WireTabView(model: model)
         case .content:  ContentTabView(model: model, openDeploys: { model.tab = .deploys })
+        case .layout:   LayoutTabView(model: model, site: site)
         case .tools:    ToolsTabView(model: model, site: site)
         case .planner:  CalendarTabView(model: model, openArticle: { entry in
                             model.tab = .content
@@ -708,7 +801,11 @@ struct OverviewTabView: View {
                                  model.newDraftFromQueue(clusterKey: key, items: items, author: "")
                              })
 
-                waitingListSection
+                /* Der Scanner hat einen eigenen Bereich. Er stand hier
+                   unter dem Ueberblick und war damit dem Schreiben von
+                   Artikeln untergeordnet, obwohl er etwas ganz anderes
+                   tut: er sichtet, was draussen passiert ist. */
+                scannerPointer
 
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
@@ -830,98 +927,42 @@ struct OverviewTabView: View {
         .onDisappear { model.stopPolling() }
     }
 
-    @ViewBuilder private var waitingListSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("News waiting list")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.textPrimary)
+    private var scannerPointer: some View {
+        Button { model.tab = .wire } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .foregroundColor(.accentNavy)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("News scanner")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.textPrimary)
+                    Text(scannerLine)
+                        .font(.system(size: 11))
+                        .foregroundColor(.textSecondary)
+                }
                 Spacer()
-                if model.reviewQueueLoading { ProgressView().controlSize(.small) }
-                /* Provenance, not decoration. A count without a time is a
-                   claim without a date, which is the thing this project
-                   exists to avoid. */
-                Text(model.reviewQueueState.provenance(source: "review_queue"))
-                    .font(.system(size: 11, design: .monospaced))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11))
                     .foregroundColor(.textSecondary)
             }
-
-            /* Whether the schedule is alive, said out loud. Reading a queue
-               tells you what is in it, never whether anything is still being
-               put there — and a list that stopped being fed looks exactly
-               like a quiet week. Refreshes itself every five minutes. */
-            if let line = model.pipelineLine {
-                Text(line)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(line.hasPrefix("⚠") ? .statusAmber : .textSecondary)
-            }
-
-            if !SupabaseAPI.isConfigured() {
-                Card {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Connect Supabase to see scanned news").fontWeight(.semibold)
-                        Text("Settings → Accounts → paste your project URL and anon (publishable) key. Then run the ingest Edge Function — interesting items appear here for review.")
-                            .foregroundColor(.textSecondary).font(.callout)
-                    }
-                }
-            } else if let err = model.reviewQueueError {
-                Card {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("Waiting list", systemImage: "exclamationmark.triangle")
-                            .fontWeight(.semibold).foregroundColor(.statusRed)
-                        Text(err).foregroundColor(.textSecondary).font(.callout)
-                        Text("If this is a permissions error, run the SQL grant in supabase/SCAN_ONLY_SETUP.md (anon select on review_queue).")
-                            .foregroundColor(.textSecondary).font(.caption)
-                    }
-                }
-            } else if let clash = model.queueContradiction {
-                /* The alarm nothing else in the stack can raise: the run says
-                   it queued items, the queue returns none. Saying "empty" here
-                   was the wrong advice on 9 August and cost an hour. */
-                Card {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("The queue and the pipeline disagree", systemImage: "exclamationmark.2")
-                            .fontWeight(.semibold).foregroundColor(.statusAmber)
-                        Text(clash).foregroundColor(.textSecondary).font(.callout)
-                        Text("Check the anon SELECT policy on ingested_items and the column grants — supabase/SCAN_ONLY_SETUP.md.")
-                            .foregroundColor(.textSecondary).font(.caption)
-                    }
-                }
-            } else if case .never = model.reviewQueueState {
-                /* Not asked yet is not empty. The old code could not tell the
-                   difference and asserted "empty" before the first fetch. */
-                Card {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Not loaded yet").fontWeight(.semibold)
-                        Text("The waiting list has not been fetched in this session.")
-                            .foregroundColor(.textSecondary).font(.callout)
-                        Button("Load now") { Task { await model.loadReviewQueue() } }
-                            .buttonStyle(.borderless).font(.callout)
-                    }
-                }
-            } else if model.reviewQueueState.isConfirmedEmpty {
-                Card {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Waiting list is empty").fontWeight(.semibold)
-                        Text("Checked \(LoadState<Int>.ago(model.reviewQueueState.stamp ?? Date())) — nothing scored above the threshold. Trigger the ingest scan for a fresh sweep; nothing is written automatically.")
-                            .foregroundColor(.textSecondary).font(.callout)
-                    }
-                }
-            } else {
-                LazyVStack(spacing: 8) {
-                    ForEach(model.reviewQueue.prefix(25)) { item in
-                        ReviewQueueRow(item: item, seedDraft: { it in
-                            model.newDraftFromQueue(clusterKey: DraftSeed.keyFor(it),
-                                                    items: [it], author: "")
-                        })
-                    }
-                    if model.reviewQueue.count > 25 {
-                        Text("Showing 25 of \(model.reviewQueue.count) — open Supabase Table Editor for the rest.")
-                            .font(.caption).foregroundColor(.textSecondary)
-                    }
-                }
-            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.bgCard))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cardBorder, lineWidth: 1))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+    }
+
+    /// What the pointer can honestly say without opening the panel.
+    private var scannerLine: String {
+        if model.reviewQueueLoading { return "checking" }
+        if model.reviewQueueError != nil { return "could not be read" }
+        if case .never = model.reviewQueueState { return "not checked yet" }
+        let n = model.reviewQueue.count
+        return n == 0 ? "nothing waiting"
+                      : "\(n) item\(n == 1 ? "" : "s") waiting, "
+                        + model.reviewQueueState.provenance(source: "review_queue")
     }
 
     private func entryPill(_ e: ContentEntry) -> some View {
