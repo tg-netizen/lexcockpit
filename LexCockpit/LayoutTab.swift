@@ -31,7 +31,11 @@ struct LayoutTabView: View {
        Tabellen, Werkzeugparameter. */
     @State private var previewing = true
     @State private var picked: String?
-    @Environment(\.colorScheme) private var scheme
+    /* Die Vorschau zeigt die Website, nicht die App. Sie faengt deshalb
+       hell an, weil das die Seite ist, die der Leser aufschlaegt, und
+       nicht weil dieser Mac gerade dunkel eingestellt ist. Der Umschalter
+       ist daneben, um den Dunkelmodus zu pruefen. */
+    @State private var previewDark = false
 
     private var page: SitePage? {
         model.pages.first { $0.id == (selected ?? model.pages.first?.id) }
@@ -74,7 +78,13 @@ struct LayoutTabView: View {
             .padding(20)
         }
         .background(Color.bgPage)
-        .task { await model.loadPages() }
+        .task {
+            await model.loadPages()
+            /* Ohne Stylesheet zeigt die Vorschau die Struktur und nicht
+               das Aussehen. Sie hier zu holen erspart einen Klick, den
+               niemand von selbst findet. */
+            await model.loadDesign()
+        }
     }
 
     // MARK: Header
@@ -793,22 +803,35 @@ extension LayoutTabView {
         VStack(alignment: .leading, spacing: 8) {
             if model.design == nil {
                 HStack(spacing: 8) {
-                    if model.designLoading {
-                        ProgressView().controlSize(.small)
-                        Text("Fetching the stylesheet").font(.system(size: 11))
-                            .foregroundColor(.textSecondary)
-                    } else {
-                        Text("Without the stylesheet this shows the structure, not the design.")
-                            .font(.system(size: 11)).foregroundColor(.statusAmber)
-                        Button("Fetch it") { Task { await model.loadDesign() } }
+                    ProgressView().controlSize(.small)
+                    Text(model.designLoading
+                         ? "Fetching the stylesheet, the page is readable meanwhile"
+                         : "No stylesheet yet, the page is readable meanwhile")
+                        .font(.system(size: 11)).foregroundColor(.textSecondary)
+                    if !model.designLoading {
+                        Button("Try again") { Task { await model.loadDesign(force: true) } }
                             .buttonStyle(.plain).foregroundColor(.accentNavy)
                             .font(.system(size: 11))
                     }
                     Spacer()
                 }
             }
+            HStack(spacing: 10) {
+                Picker("", selection: $previewDark) {
+                    Text("Light").tag(false)
+                    Text("Dark").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 150)
+                .help("How the page looks to a reader. The site carries both; "
+                      + "this switches which one you are working in.")
+                Text(previewDark ? "As a reader with a dark system sees it"
+                                 : "As a reader sees it")
+                    .font(.system(size: 11)).foregroundColor(.textSecondary)
+                Spacer()
+            }
+
             LivePreview(model: model, page: p, site: site,
-                        dark: scheme == .dark, selection: $picked)
+                        dark: previewDark, selection: $picked)
                 .frame(minHeight: 560)
                 .overlay(RoundedRectangle(cornerRadius: 2)
                     .stroke(Color.cardBorder, lineWidth: 1))

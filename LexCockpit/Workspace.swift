@@ -875,7 +875,12 @@ struct WorkspaceView: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(Capsule().fill(Color.primary.opacity(0.05)))
-        } else {
+        } else if tab == .deploys {
+            /* Nur dort, wo es zur Sache gehoert. Vorher stand dieses
+               Schild auf jedem Bildschirm des Projekts, dauerhaft und in
+               Warnfarbe, fuer eine Einstellung und nicht fuer einen
+               Fehler. Eine Warnung, die immer da ist, wird zu Tapete, und
+               dann wird auch die naechste uebersehen, die zaehlt. */
             Pill(text: "No Netlify id", color: .statusAmber)
         }
     }

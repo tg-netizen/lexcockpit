@@ -48,7 +48,11 @@ struct LivePreview: NSViewRepresentable {
         ucc.add(context.coordinator, name: "edit")
         cfg.userContentController = ucc
         let web = WKWebView(frame: .zero, configuration: cfg)
-        web.setValue(false, forKey: "drawsBackground")
+        /* Nicht durchsichtig. Vorher schien der dunkle Grund der App
+           durch die Seite, waehrend der Browser schwarzen Text darauf
+           malte: unlesbar, und zwar genau so lange, bis das Stylesheet
+           geladen war. Die Seite bringt ihren eigenen Grund mit. */
+        web.setValue(true, forKey: "drawsBackground")
         context.coordinator.web = web
         context.coordinator.reload(force: true)
         return web
@@ -185,6 +189,7 @@ struct LivePreview: NSViewRepresentable {
             <html lang="en" data-theme="\(theme)">
             <head><meta charset="utf-8">
             <meta name="viewport" content="width=device-width,initial-scale=1">
+            <style>\(Self.fallbackCSS)</style>
             <style>\(css)</style>
             <style>\(Self.editorCSS)</style>
             </head>
@@ -209,6 +214,31 @@ struct LivePreview: NSViewRepresentable {
            mehr die Seite, sondern ein Bild von ihr. Deshalb nur eine
            Umrandung ohne Platzbedarf (outline, kein border) und ein Griff,
            der ausserhalb des Textflusses sitzt. */
+        /* Solange style.css nicht da ist, wuerde die Seite ohne jede
+           Regel dastehen: kein Grund, keine Schriftfarbe, keine Maße. Das
+           sind die wenigen Werte der Website, die noetig sind, damit man
+           in der Zwischenzeit lesen und arbeiten kann. Sie stehen vor
+           style.css, werden also von ihr ueberschrieben, sobald sie da
+           ist. */
+        static let fallbackCSS = """
+        :root {
+          --bg: #F7F5F0; --surface: #FFFFFF; --ink: #111111; --muted: #656C7A;
+          --rule: #E0DED8; --accent: #1B2A4A; --highlight: #C2A675;
+          --serif: Georgia, 'Times New Roman', serif;
+          --sans: -apple-system, system-ui, sans-serif;
+        }
+        :root[data-theme="dark"] {
+          --bg: #12141B; --surface: #1B2030; --ink: #D9DBE2; --muted: #9AA0AD;
+          --rule: #2A3040; --accent: #E7EAF2;
+        }
+        html, body { background: var(--bg); color: var(--ink);
+                     font-family: var(--sans); }
+        main { max-width: 46rem; margin: 0 auto; }
+        h2, h3, h4 { font-family: var(--serif); color: var(--ink); }
+        p { color: var(--ink); line-height: 1.7; }
+        a { color: var(--accent); }
+        """
+
         static let editorCSS = """
         [data-blk] { position: relative; }
         [data-blk]:hover { outline: 1px solid rgba(120,140,180,0.45); outline-offset: 4px; }
