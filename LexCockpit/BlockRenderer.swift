@@ -210,4 +210,69 @@ enum BlockRenderer {
             .map { section($1, index: $0) }
             .joined(separator: "\n\n")
     }
+
+    // MARK: - Dasselbe, aber anfassbar
+
+    /* Fuer die Vorschau, in der direkt gearbeitet wird. Der Unterschied
+       zum veroeffentlichten HTML ist genau ein Attribut je Block und je
+       Abschnitt: data-blk="abschnitt.block". Nichts wird umgebaut, nichts
+       zusaetzlich eingepackt. Ein Rahmen um jeden Block wuerde das Layout
+       verschieben, und dann zeigte die Vorschau etwas, das es nicht gibt.
+
+       Die Kennung ist die Position, nicht die UUID des Blocks: nach jeder
+       strukturellen Aenderung wird ohnehin neu gezeichnet, und eine
+       Position laesst sich auf beiden Seiten ohne Tabelle nachvollziehen. */
+    static func editableBody(_ page: SitePage) -> String {
+        page.sections.enumerated().map { si, sec -> String in
+            var out = mark(section(sec, index: si), with: "data-sec=\"\(si)\"")
+            /* Die Bloecke einzeln nachmarkieren: section() rendert sie
+               bereits fertig, also wird hier nur noch das Attribut in das
+               jeweils erste Tag geschoben. */
+            for bi in sec.blocks.indices {
+                let raw = block(sec.blocks[bi], pad: 6)
+                guard !raw.isEmpty, let r = out.range(of: raw) else { continue }
+                out.replaceSubrange(r, with: mark(raw, with: "data-blk=\"\(si).\(bi)\""))
+            }
+            return out
+        }.joined(separator: "\n\n")
+    }
+
+    /// Ein Attribut in das erste Tag eines Fragments schieben.
+    private static func mark(_ html: String, with attr: String) -> String {
+        guard let lt = html.firstIndex(of: "<") else { return html }
+        var i = html.index(after: lt)
+        while i < html.endIndex, html[i].isLetter || html[i].isNumber { i = html.index(after: i) }
+        guard i < html.endIndex else { return html }
+        var out = html
+        out.insert(contentsOf: " " + attr, at: i)
+        return out
+    }
+
+    /// Die Blocktypen, deren Text sich unmittelbar im Dokument aendern
+    /// laesst. Alles andere wird verschoben und geloescht, aber nicht
+    /// getippt: ein Werkzeug oder eine Tabelle an Ort und Stelle zu
+    /// bearbeiten waere ein Versprechen, das der Editor nicht halten kann.
+    static let typeableInPlace: Set<String> = [
+        "lead", "prose", "subhead", "limit", "hint", "heading"
+    ]
+
+    /// Was aus contenteditable zurueckkommt, auf die erlaubten
+    /// Inline-Auszeichnungen eindampfen. Ohne das schreibt der Browser
+    /// beim Tippen eigenes Markup in den Text, span mit Stilen, div statt
+    /// Zeilenumbruch, und das landete sonst in der Website.
+    static func sanitiseInline(_ html: String) -> String {
+        let allowed = "a|em|strong|abbr|code|sup|sub|br|span|b|i|q|cite|time"
+        var out = html
+        /* Alles, was kein erlaubtes Tag ist, faellt weg. Der Inhalt
+           bleibt, nur die Huelle geht. */
+        out = replace(out, pattern: "</?(?!(\(allowed))\\b)[a-zA-Z][^>]*>", with: "")
+        /* Bei den erlaubten bleibt nur href, alles andere waere Stil aus
+           dem Browser. */
+        out = replace(out, pattern: "<a\\s+[^>]*?(href=\"[^\"]*\")[^>]*>", with: "<a $1>")
+        out = replace(out, pattern: "<(span|b|i|em|strong|code|sup|sub|q|cite|time|abbr)\\s+[^>]*>",
+                      with: "<$1>")
+        out = replace(out, pattern: "&nbsp;", with: " ")
+        out = replace(out, pattern: "[ \\t\\n]+", with: " ")
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

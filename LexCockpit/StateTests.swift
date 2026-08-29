@@ -661,5 +661,72 @@ func runStateSelfTests() -> (ok: Bool, passed: Int) {
     expect(PageBlock.editable.contains("heading") && PageBlock.editable.contains("list"),
            "block: die neuen Typen lassen sich auch anlegen")
 
+    // ── Direkt in der Seite tippen ─────────────────────────────────────
+    // contenteditable gibt zurueck, was der Browser daraus gemacht hat,
+    // und Browser machen daraus einiges. Ungefiltert landete das auf der
+    // Website.
+    let dirty = "Ein Satz mit <a href=\"/x\" class=\"xl\">Link</a> und "
+              + "<span style=\"font-weight:700\">Fettem</span>, dazu "
+              + "<div>ein Kasten</div> und <font color=\"red\">Farbe</font>."
+    let clean = BlockRenderer.sanitiseInline(dirty)
+    expect(clean.contains("<a href=\"/x\">Link</a>"),
+           "tippen: ein Link ueberlebt, aber ohne die Klasse des Browsers")
+    expect(clean.contains("<span>Fettem</span>"),
+           "tippen: span bleibt, sein Inline-Stil nicht")
+    expect(!clean.contains("<div>") && clean.contains("ein Kasten"),
+           "tippen: ein div faellt weg, sein Inhalt bleibt")
+    expect(!clean.contains("<font"), "tippen: font faellt ganz weg")
+    expect(!clean.contains("class="), "tippen: keine Klasse aus dem Browser kommt durch")
+
+    expect(BlockRenderer.sanitiseInline("a&nbsp;b   c\nd") == "a b c d",
+           "tippen: geschuetzte Leerzeichen und Umbrueche werden normal")
+    expect(BlockRenderer.sanitiseInline("<script>alert(1)</script>Text") == "alert(1)Text",
+           "tippen: ein script-Tag ist kein erlaubtes Tag und faellt weg")
+
+    // ── Verschieben, und die Arithmetik dahinter ────────────────────────
+    // Wird ein Block entfernt, ruecken alle folgenden um eins vor. Wer das
+    // vergisst, legt ihn eine Stelle zu weit hinten ab, und zwar nur beim
+    // Verschieben nach unten, was beim Ausprobieren leicht durchgeht.
+    func moved(_ types: [String], from: Int, to: Int) -> [String] {
+        var a = types
+        let m = a.remove(at: from)
+        var t = to
+        if from < to { t -= 1 }
+        a.insert(m, at: max(0, min(t, a.count)))
+        return a
+    }
+    expect(moved(["a","b","c","d"], from: 0, to: 2) == ["b","a","c","d"],
+           "verschieben: nach unten landet der Block VOR dem Ziel")
+    expect(moved(["a","b","c","d"], from: 3, to: 1) == ["a","d","b","c"],
+           "verschieben: nach oben landet er ebenfalls vor dem Ziel")
+    expect(moved(["a","b","c"], from: 0, to: 0) == ["a","b","c"],
+           "verschieben: auf sich selbst aendert nichts")
+
+    // ── Die anfassbare Fassung darf nichts anderes sein ─────────────────
+    // Sie ist das veroeffentlichte HTML plus ein Attribut je Block. Waere
+    // sie mehr, bearbeitete man nicht mehr die Seite, sondern ein Bild.
+    do {
+        let probe = """
+        { "id":"p","target":"x.html","sections":[
+          { "id":"a","heading":"Kopf","eyebrow":["Auge"],
+            "blocks":[ {"type":"lead","text":"eins"},
+                       {"type":"prose","text":"zwei"} ] } ] }
+        """
+        let pg = try SitePage.parse(path: "data/pages/p.json", sha: nil, json: probe)
+        let plain = BlockRenderer.body(pg)
+        let live = BlockRenderer.editableBody(pg)
+        expect(live.contains("data-blk=\"0.0\"") && live.contains("data-blk=\"0.1\""),
+               "anfassen: jeder Block traegt seine Position")
+        expect(live.contains("data-sec=\"0\""), "anfassen: der Abschnitt auch")
+        var stripped = live
+        for needle in [" data-blk=\"0.0\"", " data-blk=\"0.1\"", " data-sec=\"0\""] {
+            stripped = stripped.replacingOccurrences(of: needle, with: "")
+        }
+        expect(stripped == plain,
+               "anfassen: ohne die Attribute ist es Zeichen fuer Zeichen das veroeffentlichte HTML")
+    } catch {
+        expect(false, "anfassen: die Probe liess sich nicht lesen (\(error))")
+    }
+
     return (ok, passed)
 }

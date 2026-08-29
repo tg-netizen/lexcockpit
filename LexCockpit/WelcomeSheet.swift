@@ -120,5 +120,5 @@ enum AppFacts {
     /// Genau die Anzahl der PASS-Zeilen von `--selftest`, also das, was
     /// `swift run LexCockpit --selftest | grep -c PASS` ausgibt. Der
     /// Selbsttest setzt das durch und schlaegt fehl, wenn es nicht stimmt.
-    static let selftests = 204
+    static let selftests = 217
 }
