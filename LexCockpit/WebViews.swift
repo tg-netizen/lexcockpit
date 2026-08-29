@@ -138,12 +138,18 @@ struct CMSTabView: View {
     }
 }
 
-// MARK: - Design tab (Canva)
+// MARK: - Canva tab
 
-/// Canva in a persistent webview — same data-store + OAuth-popup pattern as
-/// the Sveltia tab. The integration IS the workflow: design → download →
-/// drag the export into the article editor (Change-2 pipeline picks it up).
-struct DesignTabView: View {
+/* Named CanvaTabView since 29 August 2026. It was called DesignTabView and
+   was routed from nowhere, so the most obvious name in the app pointed at
+   an unreachable webview while the site's actual design lived in a CSS file
+   nothing could edit. A name that describes what a thing is beats a name
+   that describes what it was hoped to become. */
+
+/// Canva in a persistent webview, same data store and OAuth popup pattern
+/// as the Sveltia tab. The integration IS the workflow: design, download,
+/// drag the export into the article editor.
+struct CanvaTabView: View {
     @StateObject private var controller = CMSController.shared(for: URL(string: "https://www.canva.com/")!)
 
     var body: some View {

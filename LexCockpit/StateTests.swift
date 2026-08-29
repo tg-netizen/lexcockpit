@@ -482,5 +482,97 @@ func runStateSelfTests() -> Bool {
         expect(false, "layout: die Probedatei liess sich nicht lesen (\(error))")
     }
 
+    // ── Die Design-Tokens ──────────────────────────────────────────────
+    // Der Kern ist nicht das Bearbeiten, sondern das Nicht-Anfassen: eine
+    // Datei mit neuntausend Zeilen darf beim Speichern nur an den Stellen
+    // anders sein, die jemand geaendert hat.
+    let cssProbe = """
+    /* Kopf */
+    :root {
+      --bg:      #F7F5F0;
+      --ink:     #111111;
+      --muted:   #656C7A;
+      --surface: #FFFFFF;
+      --accent:  #1B2A4A;
+      --bg-cream: var(--bg);
+      --max-w:   1200px;
+    }
+    .etwas { color: var(--ink); }
+    :root[data-theme="dark"] {
+      --bg:      #12141B;
+      --ink:     #D9DBE2;
+      --surface: #1B2030;
+    }
+    .anderes { color: red; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg:      #12141B;
+        --ink:     #D9DBE2;
+        --surface: #1B2030;
+      }
+    }
+    .ende { display: none; }
+    """
+    do {
+        let sheet = try DesignSheet(css: cssProbe, sha: "s1")
+        expect(sheet.blocksFound == 3, "design: alle drei Token-Bloecke gefunden")
+        expect(sheet.tokens.count == 7, "design: sieben helle Tokens gelesen")
+        expect(sheet.tokens.first { $0.name == "bg" }?.dark == "#12141B",
+               "design: der Dunkelwert wird dem Token zugeordnet")
+        expect(sheet.tokens.first { $0.name == "max-w" }?.dark == nil,
+               "design: ein Token ohne Dunkelwert bekommt keinen erfunden")
+        expect(sheet.darkOutOfSync.isEmpty,
+               "design: beide Dunkel-Bloecke tragen dieselben Tokens")
+
+        expect(sheet.rendered() == cssProbe,
+               "design: ohne Aenderung ist die Datei zeichengleich")
+
+        // Eine helle Farbe aendern.
+        var a = sheet
+        if let i = a.tokens.firstIndex(where: { $0.name == "muted" }) {
+            a.tokens[i].light = "#5A6070"
+        }
+        let outA = a.rendered()
+        expect(outA.contains("--muted:   #5A6070;"), "design: der neue Wert steht drin")
+        expect(!outA.contains("#656C7A"), "design: der alte Wert ist weg")
+        expect(outA.count == cssProbe.count, "design: gleiche Laenge, nur der Wert ersetzt")
+        expect(outA.contains(".anderes { color: red; }") && outA.contains(".ende { display: none; }"),
+               "design: der Rest der Datei ist unberuehrt")
+
+        // Einen Dunkelwert aendern: muss in BEIDE Bloecke.
+        var b = sheet
+        if let i = b.tokens.firstIndex(where: { $0.name == "surface" }) {
+            b.tokens[i].dark = "#202638"
+        }
+        let outB = b.rendered()
+        expect(outB.components(separatedBy: "#202638").count - 1 == 2,
+               "design: ein Dunkelwert wird in beide Dunkel-Bloecke geschrieben")
+        expect(!outB.contains("#1B2030"), "design: der alte Dunkelwert ist nirgends mehr")
+        expect(outB.contains("--surface: #FFFFFF;"),
+               "design: der helle Wert desselben Tokens bleibt unangetastet")
+
+        // Kontrast, gegen von Hand nachgerechnete Werte.
+        let t = sheet.tokens
+        if let r = CSSColour.contrast("#656C7A", "#FFFFFF", in: t, dark: false) {
+            expect(abs(r - 5.28) < 0.02, "design: Kontrast 5.28 fuer muted auf weiss")
+        } else { expect(false, "design: Kontrast fuer muted konnte nicht gerechnet werden") }
+        if let r = CSSColour.contrast("#1B2A4A", "#FFFFFF", in: t, dark: false) {
+            expect(abs(r - 14.22) < 0.02, "design: Kontrast 14.22 fuer accent auf weiss")
+        } else { expect(false, "design: Kontrast fuer accent konnte nicht gerechnet werden") }
+        if let r = CSSColour.contrast("#C2A675", "#FFFFFF", in: t, dark: false) {
+            expect(abs(r - 2.33) < 0.02, "design: Gold auf weiss ist 2.33 und faellt durch")
+        } else { expect(false, "design: Kontrast fuer Gold konnte nicht gerechnet werden") }
+
+        // var() eine Ebene tief, und was nicht rechenbar ist.
+        expect(CSSColour.parse("var(--bg)", in: t, dark: false) != nil,
+               "design: var(--bg) wird aufgeloest")
+        expect(CSSColour.parse("var(--bg)", in: t, dark: true).map { $0.r < 0.2 } == true,
+               "design: var(--bg) loest im Dunkelmodus den Dunkelwert auf")
+        expect(CSSColour.contrast("1200px", "#FFFFFF", in: t, dark: false) == nil,
+               "design: was keine Farbe ist, liefert nichts statt 1.0")
+    } catch {
+        expect(false, "design: die Probe-CSS liess sich nicht lesen (\(error))")
+    }
+
     return ok
 }

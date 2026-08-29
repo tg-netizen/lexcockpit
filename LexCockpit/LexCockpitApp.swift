@@ -26,6 +26,54 @@ struct LexCockpitApp: App {
             let b = MainActor.assumeIsolated { runStateSelfTests() }
             exit(a && b ? 0 : 1)
         }
+        /* `--designcheck <style.css>` liest die echte Datei, meldet, was
+           gefunden wurde, und prueft die eine Zusage, auf der der
+           Design-Bereich steht: ohne Aenderung kommt die Datei zeichen-
+           gleich wieder heraus. Gegen eine Probe im Test zu pruefen ist
+           gut, gegen die neuntausend Zeilen der Website ist besser. */
+        if let i = CommandLine.arguments.firstIndex(of: "--designcheck"),
+           CommandLine.arguments.indices.contains(i + 1) {
+            let path = CommandLine.arguments[i + 1]
+            do {
+                let css = try String(contentsOfFile: path, encoding: .utf8)
+                let sheet = try DesignSheet(css: css, sha: nil)
+                let dark = sheet.tokens.filter { $0.dark != nil }.count
+                print("Bloecke gefunden : \(sheet.blocksFound) von 3")
+                print("Tokens           : \(sheet.tokens.count), davon \(dark) mit Dunkelwert")
+                print("Nicht in beiden Dunkel-Bloecken: "
+                      + (sheet.darkOutOfSync.isEmpty ? "keine"
+                         : sheet.darkOutOfSync.joined(separator: ", ")))
+                let same = sheet.rendered() == css
+                print(same ? "PASS  unveraendert ist zeichengleich (\(css.count) Zeichen)"
+                           : "FAIL  unveraendert ist NICHT zeichengleich")
+                /* Und eine Aenderung, um zu sehen, dass wirklich nur sie
+                   ankommt. */
+                var probe = sheet
+                if let k = probe.tokens.firstIndex(where: { $0.name == "muted" }) {
+                    let alt = probe.tokens[k].light
+                    probe.tokens[k].light = "#5A6070"
+                    let out = probe.rendered()
+                    /* Nachgelesen statt im Text gesucht: der alte Wert
+                       #656C7A steht im Stylesheet auch ausserhalb der
+                       Token-Bloecke, und danach zu suchen hiesse, den
+                       Rest der Datei mitzupruefen, den wir gerade NICHT
+                       anfassen wollen. */
+                    let again = try DesignSheet(css: out, sha: nil)
+                    let now = again.tokens.first { $0.name == "muted" }?.light
+                    let others = zip(sheet.tokens, again.tokens).filter {
+                        $0.0.name != "muted" && ($0.0.light != $0.1.light || $0.0.dark != $0.1.dark)
+                    }
+                    print(now == "#5A6070" && others.isEmpty
+                          ? "PASS  nur --muted ist anders (\(alt) -> #5A6070), "
+                            + "die anderen \(again.tokens.count - 1) Tokens unveraendert"
+                          : "FAIL  die Aenderung kam nicht sauber an")
+                }
+                exit(same ? 0 : 1)
+            } catch {
+                print("FEHLER: \(error.localizedDescription)")
+                exit(1)
+            }
+        }
         // `--roundtrip <dir>` → run the WYSIWYG round-trip data-safety test
         // against real article files (offscreen Toast UI editor) and exit.
         if let i = CommandLine.arguments.firstIndex(of: "--roundtrip"),

@@ -28,7 +28,7 @@ import UniformTypeIdentifiers
    from a general idea of work rather than from this site, which is why
    nothing in them could be found by someone who knows the site. */
 enum WorkspaceTab: String, CaseIterable, Identifiable {
-    case overview, layout, tools, radar, analytics
+    case overview, layout, design, tools, radar, analytics
     case wire, content, planner
     case tracker, pipeline, trilogue, enforcement
     case sanctions
@@ -41,6 +41,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
         switch self {
         case .overview:    return "Overview"
         case .layout:      return "Layout"
+        case .design:      return "Design"
         case .tools:       return "Instruments"
         case .radar:       return "Radar"
         case .analytics:   return "Analytics"
@@ -67,6 +68,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
         switch self {
         case .overview:    return "rectangle.3.group"
         case .layout:      return "square.stack.3d.up"
+        case .design:      return "paintpalette"
         case .tools:       return "wrench.and.screwdriver"
         case .radar:       return "dot.radiowaves.left.and.right"
         case .analytics:   return "chart.bar"
@@ -133,7 +135,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 
         var members: [WorkspaceTab] {
             switch self {
-            case .project:    return [.overview, .layout, .tools, .radar, .analytics]
+            case .project:    return [.overview, .layout, .design, .tools, .radar, .analytics]
             case .news:       return [.wire, .content, .planner]
             case .regulation: return [.tracker, .pipeline, .trilogue, .enforcement]
             case .sanctions:  return [.sanctions]
@@ -219,6 +221,17 @@ final class WorkspaceModel: ObservableObject {
     @Published var pagesDirty: Set<String> = []
     @Published var pageSaving: String?
     @Published var pageSaveError: String?
+
+    /* ── Design tokens ────────────────────────────────────────────────
+       The custom properties in assets/css/style.css. Everything else in
+       that stylesheet refers to them, so changing one changes the whole
+       site in step. That is what makes them safe to edit from here. */
+    @Published var designState: LoadState<DesignSheet> = .never
+    var design: DesignSheet? { designState.value }
+    var designError: String? { designState.error }
+    var designLoading: Bool { designState.isLoading }
+    @Published var designSaving = false
+    @Published var designSaveError: String?
 
     // Content (browser + editor) — lives here so edits survive tab switches
     @Published var contentState: LoadState<[ContentEntry]> = .never
@@ -539,6 +552,76 @@ final class WorkspaceModel: ObservableObject {
         markPageDirty(page.id)
     }
 
+    // MARK: Design tokens
+
+    func loadDesign(force: Bool = false) async {
+        if !force, case .loaded = designState { return }
+        guard let repo = site.repo, !repo.isEmpty else {
+            designState = .failed(
+                "This project has no repo configured, so the stylesheet cannot be read.",
+                at: Date())
+            return
+        }
+        designState.beginLoading()
+        do {
+            let file = try await GitHubAPI.file(repo: repo, path: "assets/css/style.css")
+            guard let css = file.decodedText() else {
+                designState = .failed("style.css came back but could not be read as text.",
+                                      at: Date())
+                return
+            }
+            designState = .loaded(try DesignSheet(css: css, sha: file.sha), at: Date())
+        } catch {
+            designState = .failed(error.localizedDescription, at: Date())
+        }
+    }
+
+    /// Write the stylesheet back with the edited values substituted in.
+    func saveDesign() async {
+        guard let repo = site.repo, !repo.isEmpty, let sheet = design else { return }
+        guard !sheet.changed.isEmpty else { return }
+        designSaving = true
+        designSaveError = nil
+        do {
+            let names = sheet.changed.map(\.name).sorted().joined(separator: ", ")
+            let res = try await GitHubAPI.put(
+                repo: repo, path: sheet.path,
+                message: "Design: " + names + " ueber LexCockpit geaendert",
+                text: sheet.rendered(), sha: sheet.sha)
+            /* Re-read from what was just written, so the panel shows the
+               new values as the baseline and a second edit is measured
+               against them rather than against the old file. */
+            var fresh = try DesignSheet(css: sheet.rendered(), sha: res.content?.sha ?? sheet.sha)
+            fresh.sha = res.content?.sha ?? sheet.sha
+            designState = .loaded(fresh, at: Date())
+        } catch {
+            designSaveError = error.localizedDescription
+        }
+        designSaving = false
+    }
+
+    /// Change one token. The sheet is a value type, so it is edited and
+    /// put back rather than mutated in place.
+    func setToken(_ name: String, light: String?, dark: String?) {
+        guard var sheet = design,
+              let i = sheet.tokens.firstIndex(where: { $0.name == name }) else { return }
+        if let light { sheet.tokens[i].light = light }
+        if let dark { sheet.tokens[i].dark = dark }
+        designState = .loaded(sheet, at: designState.stamp ?? Date())
+        designSaveError = nil
+    }
+
+    /// Put every edited token back to what it was in the file.
+    func revertDesign() {
+        guard var sheet = design else { return }
+        for i in sheet.tokens.indices {
+            sheet.tokens[i].light = sheet.tokens[i].originalLight
+            sheet.tokens[i].dark = sheet.tokens[i].originalDark
+        }
+        designState = .loaded(sheet, at: designState.stamp ?? Date())
+        designSaveError = nil
+    }
+
     // MARK: Sanctions dossiers
 
     /// One request: the repo tree already lists every file, so the stock
@@ -720,6 +803,7 @@ struct WorkspaceView: View {
         case .wire:     WireTabView(model: model)
         case .content:  ContentTabView(model: model, openDeploys: { model.tab = .deploys })
         case .layout:   LayoutTabView(model: model, site: site)
+        case .design:   DesignTabView(model: model)
         case .tools:    ToolsTabView(model: model, site: site)
         case .planner:  CalendarTabView(model: model, openArticle: { entry in
                             model.tab = .content
