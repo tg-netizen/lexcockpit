@@ -265,6 +265,38 @@ struct LayoutTabView: View {
                 multiline(block.text) { v in
                     write(p, si, bi) { $0.fields["text"] = .string(v) }
                 }
+            case "heading":
+                Picker("Level", selection: Binding(
+                    get: { { if case .number(let d) = block.fields["level"] { return Int(d) }
+                             return 3 }() },
+                    set: { v in write(p, si, bi) { $0.fields["level"] = .number(Double(v)) } })) {
+                    Text("Heading 3").tag(3)
+                    Text("Heading 4").tag(4)
+                }
+                .pickerStyle(.segmented).frame(width: 220)
+                field("Text", block.text) { v in
+                    write(p, si, bi) { $0.fields["text"] = .string(v) }
+                }
+                field("Anchor id, optional", block.fields["id"]?.stringValue ?? "") { v in
+                    write(p, si, bi) {
+                        if v.isEmpty { $0.fields.removeValue(forKey: "id") }
+                        else { $0.fields["id"] = .string(v) }
+                    }
+                }
+
+            case "list":
+                Toggle("Numbered", isOn: Binding(
+                    get: { { if case .bool(true) = block.fields["ordered"] { return true }
+                             return false }() },
+                    set: { v in write(p, si, bi) {
+                        if v { $0.fields["ordered"] = .bool(true) }
+                        else { $0.fields.removeValue(forKey: "ordered") }
+                    } }))
+                    .toggleStyle(.checkbox)
+                lines("One item per line", block.fields["items"]?.stringList ?? []) { v in
+                    write(p, si, bi) { $0.fields["items"] = .array(v.map { .string($0) }) }
+                }
+
             case "next":
                 field("Label", block.fields["label"]?.stringValue ?? "") { v in
                     write(p, si, bi) { $0.fields["label"] = .string(v) }
@@ -333,6 +365,33 @@ struct LayoutTabView: View {
             .frame(maxWidth: 360)
             field("Container class", block.fields["cls"]?.stringValue ?? "") { v in
                 write(p, si, bi) { $0.fields["cls"] = .string(v) }
+            }
+
+            /* Die Parameter eines Werkzeugs. Das ist die Stelle, an der
+               sich seine Logik justieren laesst, ohne den Code
+               anzufassen: die Werkzeuge lesen genau diese Attribute. */
+            let params = block.fields["params"]?.objectValue ?? [:]
+            if !params.isEmpty {
+                Text("PARAMETERS")
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.4)
+                    .foregroundColor(.textSecondary)
+                ForEach(params.keys.sorted(), id: \.self) { k in
+                    field(k, params[k]?.stringValue ?? "") { v in
+                        write(p, si, bi) {
+                            var o = $0.fields["params"]?.objectValue ?? [:]
+                            o[k] = .string(v)
+                            $0.fields["params"] = .object(o)
+                        }
+                    }
+                }
+            }
+            if let inner = block.fields["inner"]?.stringValue, !inner.isEmpty {
+                /* Der Inhalt des Containers geht woertlich hinaus. Er wird
+                   hier gezeigt, damit man weiss, dass er da ist, und nicht
+                   bearbeitet, weil dieser Editor ihn nicht versteht. */
+                Text("The container holds \(inner.count) characters of markup, "
+                     + "written back unchanged.")
+                    .font(.system(size: 10)).foregroundColor(.textSecondary)
             }
             if let t = model.tools.first(where: { $0.attribute == current }),
                let script = t.script {

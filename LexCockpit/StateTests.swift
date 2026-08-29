@@ -610,5 +610,56 @@ func runStateSelfTests() -> (ok: Bool, passed: Int) {
         expect(false, "bild: die Seite liess sich nicht schreiben (\(error))")
     }
 
+    // ── Die neuen Blocktypen ───────────────────────────────────────────
+    // Ueberschriften und Listen waren die groesste Luecke: 119 h3, 9 h4,
+    // 82 ul und 16 ol auf der Website liessen sich vorher gar nicht
+    // ausdruecken und wurden bei jeder Umstellung zu rohen Bloecken.
+    var h = PageBlock.make("heading")
+    h.fields["text"] = .string("Wo die Regel greift")
+    expect(BlockRenderer.block(h, pad: 0) == "<h3>Wo die Regel greift</h3>",
+           "block: eine Ueberschrift ist standardmaessig Stufe 3")
+    h.fields["level"] = .number(4)
+    expect(BlockRenderer.block(h, pad: 0) == "<h4>Wo die Regel greift</h4>",
+           "block: Stufe 4 wird respektiert")
+    h.fields["id"] = .string("regel")
+    expect(BlockRenderer.block(h, pad: 0).contains("<h4 id=\"regel\">"),
+           "block: eine Ueberschrift kann ein Sprungziel tragen")
+    h.fields["level"] = .number(9)
+    expect(BlockRenderer.block(h, pad: 0).hasPrefix("<h3"),
+           "block: eine unsinnige Stufe faellt auf 3 zurueck statt h9 zu bauen")
+
+    var li = PageBlock.make("list")
+    li.fields["items"] = .array([.string("eins"), .string("zwei")])
+    let ul = BlockRenderer.block(li, pad: 0)
+    expect(ul.hasPrefix("<ul>") && ul.contains("<li>eins</li>") && ul.hasSuffix("</ul>"),
+           "block: eine Liste ist ohne Angabe ungeordnet")
+    li.fields["ordered"] = .bool(true)
+    expect(BlockRenderer.block(li, pad: 0).hasPrefix("<ol>"),
+           "block: ordered macht daraus eine nummerierte Liste")
+    expect(li.summary.contains("2 numbered"),
+           "block: die Zeile nennt Anzahl und Art der Liste")
+
+    // ── Werkzeuge mit Kennung und Inhalt ───────────────────────────────
+    // 27 Montagepunkte der Website tragen eine id, viele einen
+    // Ladeplatzhalter. Ohne beides waere keine Seite mit einem Werkzeug
+    // vollstaendig aus Bloecken baubar.
+    var tl = PageBlock.make("tool")
+    tl.fields["attribute"] = .string("data-bayes")
+    tl.fields["cls"] = .string("bayes")
+    tl.fields["id"] = .string("alert")
+    tl.fields["params"] = .object(["data-state": .string("loading"),
+                                   "data-truth": .string("threat")])
+    tl.fields["inner"] = .string("  <p class=\"tool-head\">Lade</p>")
+    let out = BlockRenderer.block(tl, pad: 0)
+    expect(out.contains("id=\"alert\""), "block: ein Werkzeug traegt seine Kennung")
+    expect(out.contains("data-bayes"), "block: und seinen Montagepunkt")
+    expect(out.range(of: "data-state=\"loading\" data-truth=\"threat\"") != nil,
+           "block: Parameter stehen sortiert, damit beide Renderer gleich bauen")
+    expect(out.contains("<p class=\"tool-head\">Lade</p>"),
+           "block: der Inhalt des Containers geht woertlich hinaus")
+
+    expect(PageBlock.editable.contains("heading") && PageBlock.editable.contains("list"),
+           "block: die neuen Typen lassen sich auch anlegen")
+
     return (ok, passed)
 }
